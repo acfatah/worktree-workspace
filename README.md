@@ -7,7 +7,7 @@ Comprehensive Workflow Guide on using Git Worktree for Development with AI Integ
 Create a new directory then run the following command to set up the workflow template:
 
 ```bash
-bunx gitpick @acfatah/workflow-using-worktree/tree/main/template
+bunx gitpick acfatah/workflow-using-worktree/tree/main/template .
 ```
 
 
