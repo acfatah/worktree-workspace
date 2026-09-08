@@ -15,10 +15,10 @@ bunx gitpick acfatah/workflow-using-worktree/tree/main/template .
 
 ```
 project-root/
-├── scratch/        # Contains working notes and temporary files.
 ├── template/
 │   ├── docs/       # Contains documentation for the workflow.
 │   ├── repos/      # Contains the main repositories for the project.
+│   ├── scratch/    # Contains working notes and temporary files.
 │   ├── scripts/    # Contains scripts for automating worktree creation and cleanup.
 │   └── worktrees/  # Contains worktrees for different branches and scopes
 ├── LICENSE
