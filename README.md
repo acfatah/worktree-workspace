@@ -13,17 +13,21 @@ bunx gitpick acfatah/workflow-using-worktree/tree/main/template .
 
 ## Directory Structure
 
+After running the Quick Start command, the workspace looks like this:
+
 ```
 project-root/
-├── template/
-│   ├── docs/       # Contains documentation for the workflow.
-│   ├── repos/      # Contains the main repositories for the project.
-│   ├── scratch/    # Contains working notes and temporary files.
-│   ├── scripts/    # Contains scripts for automating worktree creation and cleanup.
-│   └── worktrees/  # Contains worktrees for different branches and scopes
-├── LICENSE
-└── README.md
+├── CLAUDE.md         # Placement rules for the worktree workflow.
+├── docs/             # Documentation for this workspace.
+├── repos/            # Main clone of each repository.
+├── scratch/          # Working notes and temporary files.
+├── scripts/          # Worktree creation, retirement, and repo sync.
+├── skills-lock.json  # Pinned agent skills.
+└── worktrees/        # One worktree per branch, per repo.
 ```
+
+`docs/` and `worktrees/` are created on first use. In this repository the
+same tree lives under `template/`, which is what `gitpick` copies.
 
 ## Workflow Steps
 
@@ -43,26 +47,29 @@ project-root/
 
 ### 3. Plan Development with AI/Agent
 
-Install the planning skill once per project:
+Install the planning skill:
 
 ```bash
 npx skills add mattpocock/skills@setup-matt-pocock-skills
 ```
 
-Then run the `setup-matt-pocock-skills` skill to configure this repository's
-issue tracker, triage label vocabulary, and domain doc layout for the rest of
-the engineering skills.
+Then run `setup-matt-pocock-skills` **from inside `repos/<repo>`**, once per
+repository, to configure its issue tracker, triage label vocabulary, and
+domain doc layout. It writes to the repository, so every worktree and every
+pull request inherits the result. Running it at the workspace root instead
+leaves the configuration where no worktree can read it.
 
 Installed skills are pinned in `skills-lock.json`. To restore them in a fresh
 checkout, run `npx skills experimental_install` — the command is still marked
 experimental upstream.
 
-- Use an AI assistant or planning agent to:
-  - Outline tasks.
-  - Generate scaffolding code or documentation.
-  - Suggest migration strategies.
-  - Track dependencies and risks.
-- Store plans in the branch directory (worktrees/...) for traceability.
+Use an AI assistant or planning agent to outline tasks, generate scaffolding,
+suggest migration strategies, and track dependencies and risks.
+
+Plans do not live in the worktree, because step 7 deletes it. Put them in
+`scratch/active/<feature>/` while they are in flux, and commit the ones that
+stabilise into the repository as documentation or an ADR. `CLAUDE.md` has the
+full placement table and the session-by-session flow.
 
 ### 4. Develop in the Worktree
 
@@ -89,8 +96,9 @@ experimental upstream.
 
 After PR merge or branch closure:
 - Run `scripts/worktree-retire` to remove the worktree.
+- Run `scripts/sync-repos` to bring `repos/<repo>` up to date.
 - Drop temporary databases if used.
-- Archive AI planning notes if valuable for future reference.
+- Move the feature's notes from `scratch/active/` to `scratch/archive/`.
 
 
 ## `scratch/` directory
