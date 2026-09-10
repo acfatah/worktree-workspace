@@ -1,0 +1,289 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+_self=${BASH_SOURCE[0]}
+while [ -L "$_self" ]; do
+  _dir=$(cd -P "$(dirname -- "$_self")" && pwd)
+  _self=$(readlink -- "$_self")
+  case $_self in
+    /*) ;;
+    *)  _self=$_dir/$_self ;;
+  esac
+done
+SCRIPT_DIR=$(cd -P "$(dirname -- "$_self")" && pwd)
+
+# shellcheck source=./lib/workspace.sh
+. "$SCRIPT_DIR/lib/workspace.sh"
+
+USAGE='Usage: worktree-prune [options] [<repo>...]
+
+      --yes           actually retire the candidates (default: dry run)
+      --no-fetch      do not fetch; [gone] detection will be stale
+      --merged-only   only merged branches
+      --gone-only     only branches whose remote is gone
+      --force         pass --force through to worktree-retire
+  -h, --help          show this help
+
+Finds worktrees whose work has landed and hands each to worktree-retire.
+Without --yes it changes nothing except clearing git'"'"'s stale worktree records.
+
+This is not `git worktree prune`; it runs that first, then decides what has
+actually been merged.'
+
+do_it=0
+fetch=1
+merged_only=0
+gone_only=0
+force=0
+names=
+
+while [ $# -gt 0 ]; do
+  case $1 in
+    --yes|-y)      do_it=1 ;;
+    --no-fetch)    fetch=0 ;;
+    --merged-only) merged_only=1 ;;
+    --gone-only)   gone_only=1 ;;
+    --force)       force=1 ;;
+    -h|--help)     printf '%s\n' "$USAGE"; exit 0 ;;
+    --)            shift; break ;;
+    -*)            usage_die "unknown option: $1" ;;
+    *)             names=$names$1$'\n' ;;
+  esac
+  shift
+done
+
+while [ $# -gt 0 ]; do
+  names=$names$1$'\n'
+  shift
+done
+
+ws_require_workspace
+
+if [ -z "$names" ]; then
+  names=$(ws_list_repos)
+  if [ -n "$names" ]; then
+    names=$names$'\n'
+  fi
+fi
+
+if [ -z "$names" ]; then
+  log_warn "no repositories under repos/"
+  exit 0
+fi
+
+candidates=
+n_retire=0
+n_skip=0
+n_review=0
+n_keep=0
+
+while IFS= read -r name; do
+  [ -n "$name" ] || continue
+  dir=$REPOS_DIR/$name
+  [ -e "$dir/.git" ] || continue
+
+  log_step "$name"
+
+  # Safe on its own: this only drops records for directories already deleted.
+  git -C "$dir" worktree prune
+
+  if [ "$fetch" = 1 ] && git -C "$dir" remote get-url origin >/dev/null 2>&1; then
+    git -C "$dir" fetch --prune --quiet origin || \
+      log_warn "$name: fetch failed; [gone] detection may be stale"
+  fi
+
+  base=$(ws_default_branch "$dir" 2>/dev/null) || base=
+  merged_list=
+  if [ -n "$base" ]; then
+    merged_list=$(git -C "$dir" branch --format='%(refname:short)' \
+      --merged "$(ws_base_ref "$dir" "$base")" 2>/dev/null) || merged_list=
+  fi
+
+  branches=$(ws_branch_table "$dir")
+  pr_rows=$(ws_pr_table "$dir")
+  main_path=$(ws_realpath "$dir")
+
+  while IFS=$'\t' read -r p b f; do
+    [ -n "$p" ] || continue
+    [ -n "$b" ] || continue
+
+    if [ -d "$p" ] && [ "$(ws_realpath "$p")" = "$main_path" ]; then
+      continue
+    fi
+
+    line=$(printf '%s\n' "$branches" | awk -F'\t' -v n="$b" '$1 == n { print; exit }')
+    upstream=$(printf '%s' "$line" | cut -f2)
+    track=$(printf '%s' "$line" | cut -f3)
+
+    pr_num=
+    pr_state=
+    if [ -n "$pr_rows" ]; then
+      pr_line=$(printf '%s\n' "$pr_rows" | awk -F'\t' -v n="$b" '$1 == n { print; exit }')
+      if [ -n "$pr_line" ]; then
+        pr_num=$(printf '%s' "$pr_line" | cut -f2)
+        pr_state=$(printf '%s' "$pr_line" | cut -f3)
+      fi
+    fi
+
+    verdict=keep
+    evidence=
+    pr_confirmed_merged=0
+
+    # A branch with no upstream that still sits on the base commit was never
+    # worked on. git calls it merged, but there is nothing to clean up and
+    # retiring a freshly created worktree would be a nasty surprise. The
+    # upstream test matters: a fast-forward merge also leaves the branch tip
+    # equal to the base tip, and that one IS a candidate.
+    started=1
+    if [ -z "$upstream" ] && [ -n "$base" ]; then
+      base_sha=$(git -C "$dir" rev-parse --verify --quiet "$(ws_base_ref "$dir" "$base")") || base_sha=
+      branch_sha=$(git -C "$dir" rev-parse --verify --quiet "refs/heads/$b") || branch_sha=
+      if [ -n "$base_sha" ] && [ "$base_sha" = "$branch_sha" ]; then
+        started=0
+      fi
+    fi
+
+    if [ "$pr_state" = MERGED ]; then
+      verdict=MERGED
+      evidence="pull request $pr_num"
+      pr_confirmed_merged=1
+    elif [ "$started" = 0 ]; then
+      verdict=keep
+      evidence="no commits yet"
+    elif printf '%s\n' "$merged_list" | grep -qxF "$b"; then
+      verdict=MERGED
+      evidence="merged into $base"
+    else
+      case $track in
+        *gone*)
+          verdict=GONE
+          evidence="remote branch deleted"
+          ;;
+      esac
+      if [ "$verdict" = keep ] && [ "$pr_state" = CLOSED ]; then
+        verdict=REVIEW
+        evidence="pull request $pr_num closed unmerged"
+      fi
+    fi
+
+    if [ "$merged_only" = 1 ] && [ "$verdict" != MERGED ]; then verdict=keep; fi
+    if [ "$gone_only" = 1 ] && [ "$verdict" != GONE ]; then verdict=keep; fi
+
+    note=
+    if [ "$verdict" = MERGED ] || [ "$verdict" = GONE ]; then
+      case $f in
+        *locked*)
+          verdict=skip
+          note="locked"
+          ;;
+      esac
+      if [ "$verdict" != skip ] && [ ! -d "$p" ]; then
+        verdict=skip
+        note="directory is missing"
+      fi
+      if [ "$verdict" != skip ] && ws_is_dirty "$p"; then
+        verdict=skip
+        note="uncommitted changes"
+      fi
+      if [ "$verdict" != skip ] && [ "$pr_confirmed_merged" != 1 ]; then
+        # After a squash merge every commit looks unpushed, because the squashed
+        # commit is a different object. Only a merged PR settles that; otherwise
+        # flag it and ask, even under --yes.
+        unpushed=$(ws_unpushed_count "$p")
+        if [ "$unpushed" -gt 0 ]; then
+          note="unpushed:$unpushed"
+        fi
+      fi
+    fi
+
+    case $verdict in
+      MERGED|GONE) n_retire=$((n_retire + 1)) ;;
+      skip)        n_skip=$((n_skip + 1)) ;;
+      REVIEW)      n_review=$((n_review + 1)) ;;
+      *)           n_keep=$((n_keep + 1)) ;;
+    esac
+
+    candidates=$candidates$name$'\t'$b$'\t'$p$'\t'$verdict$'\t'$evidence$'\t'$note$'\n'
+  done <<EOT
+$(ws_worktree_records "$dir")
+EOT
+done <<EOT
+$names
+EOT
+
+if [ -z "$candidates" ]; then
+  log_info "no worktrees to consider"
+  exit 0
+fi
+
+log_info ""
+current_repo=
+while IFS=$'\t' read -r repo branch path verdict evidence note; do
+  [ -n "$repo" ] || continue
+  if [ "$repo" != "$current_repo" ]; then
+    printf '%s\n' "$(PC_bold "$repo")"
+    current_repo=$repo
+  fi
+
+  # Pad to a fixed width before colouring; escape bytes must not be counted.
+  cell=$(printf '%-6s' "$verdict")
+  case $verdict in
+    MERGED) painted=$(PC_green "$cell");  action='-> retire' ;;
+    GONE)   painted=$(PC_green "$cell");  action='-> retire' ;;
+    REVIEW) painted=$(PC_yellow "$cell"); action='review manually' ;;
+    skip)   painted=$(PC_yellow "$cell"); action="skipped: $note" ;;
+    *)      painted=$(PC_dim "$cell");    action='keep' ;;
+  esac
+
+  if [ "$verdict" = MERGED ] || [ "$verdict" = GONE ]; then
+    if [ -n "$note" ]; then
+      action="$action ($note)"
+    fi
+  fi
+
+  printf '  %-24s %s  %-28s %s\n' "$branch" "$painted" "${evidence:--}" "$action"
+done <<EOT
+$candidates
+EOT
+
+log_info ""
+
+if [ "$do_it" != 1 ]; then
+  log_success "$n_retire to retire, $n_skip skipped, $n_review to review, $n_keep kept"
+  log_detail "re-run with --yes to retire them"
+  exit 0
+fi
+
+failed=0
+while IFS=$'\t' read -r repo branch path verdict evidence note; do
+  [ -n "$repo" ] || continue
+  case $verdict in
+    MERGED|GONE) ;;
+    *) continue ;;
+  esac
+
+  case $note in
+    unpushed:*)
+      # Deliberately ignores --yes: this is the "squash-merged, then kept
+      # committing" case and it must never be silent.
+      if ! ( WORKFLOW_YES=; confirm "$repo $branch has $note; retire anyway?" n ); then
+        log_warn "kept $repo $branch"
+        continue
+      fi
+      ;;
+  esac
+
+  if [ "$force" = 1 ]; then
+    "$SCRIPT_DIR/worktree-retire" --yes --no-fetch --force "$repo" "$branch" || failed=$((failed + 1))
+  else
+    "$SCRIPT_DIR/worktree-retire" --yes --no-fetch "$repo" "$branch" || failed=$((failed + 1))
+  fi
+done <<EOT
+$candidates
+EOT
+
+if [ "$failed" -gt 0 ]; then
+  die 7 "$failed worktree(s) could not be retired"
+fi
+
+log_success "done"

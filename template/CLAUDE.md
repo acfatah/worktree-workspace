@@ -27,11 +27,17 @@ anything that must outlive the branch is written somewhere else.
 | `CONTEXT.md`, `docs/adr/`, `docs/agents/` | `repos/<repo>`, committed | every worktree, and the PR |
 | Tickets and specs | the configured issue tracker | every session |
 | Grilling notes, research, prototype notes | `scratch/active/<feature>/` | every worktree |
+| Branch setup: database, dependencies | `repos/<repo>/.workflow/`, committed | every worktree, via `post-create` |
 | Code | the worktree, committed | the branch |
 
 Committed docs reach every worktree because they are tracked files on the
 branch. `scratch/` reaches every worktree because it sits above all of
 them. The worktree reaches nothing but itself.
+
+`scripts/worktree-create` links `scratch/active` into each new worktree as
+`.scratch`, and `scripts/worktree-retire` moves `scratch/active/<feature>`
+to `scratch/archive/<feature>`. That is what makes the `scratch/active/`
+row's promise survive the worktree that produced it.
 
 `/handoff` writes to the OS temp directory by default. Move the file into
 `scratch/active/<feature>/` when it should survive the session.
@@ -48,10 +54,14 @@ also the size of one worktree. Keep them 1:1.
 2. Per ticket: `scripts/worktree-create <repo> <scope>/<ticket-slug>`,
    `/clear`, then `/implement`. It drives `/tdd` and closes with
    `/code-review`.
-3. PR, merge, `scripts/worktree-retire`, `scripts/sync-repos`.
+3. PR, merge, `scripts/worktree-retire`, `scripts/sync-repos`. After a
+   batch of merges, `scripts/worktree-prune` retires everything that
+   landed in one pass; it is a dry run until you pass `--yes`.
 
 Work the frontier: any ticket whose blockers are all done can take a
 worktree, so independent tickets run in parallel worktrees.
+`scripts/worktree-list` is the view of that frontier: it shows every
+worktree, its branch, whether it is dirty, and its pull request state.
 
 ## Issue tracker
 
@@ -61,12 +71,17 @@ construction.
 
 The local-markdown option writes `.scratch/<feature>/issues/` inside the
 repo, which strands the ticket list on one branch. To use it anyway,
-record the shared path in `repos/<repo>/docs/agents/issue-tracker.md` and
-link each new worktree to the workspace scratch:
+record the shared path in `repos/<repo>/docs/agents/issue-tracker.md`.
+
+`scripts/worktree-create` already links each new worktree to the workspace
+scratch, so there is nothing to do by hand. If you ever do it manually,
+note that `info/exclude` is shared by every worktree of the repository, so
+a blind append adds a duplicate line every time:
 
 ```bash
 ln -sfn ../../../scratch/active .scratch
-echo .scratch >> "$(git rev-parse --git-path info/exclude)"
+excl=$(git rev-parse --git-path info/exclude)   # shared, not per-worktree
+grep -qxF .scratch "$excl" || printf '%s\n' .scratch >> "$excl"
 ```
 
 ## Skills

@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+_self=${BASH_SOURCE[0]}
+while [ -L "$_self" ]; do
+  _dir=$(cd -P "$(dirname -- "$_self")" && pwd)
+  _self=$(readlink -- "$_self")
+  case $_self in
+    /*) ;;
+    *)  _self=$_dir/$_self ;;
+  esac
+done
+SCRIPT_DIR=$(cd -P "$(dirname -- "$_self")" && pwd)
+
+# shellcheck source=./lib/workspace.sh
+. "$SCRIPT_DIR/lib/workspace.sh"
+
+USAGE='Usage: repo-add [options] <url> [<name>]
+
+  --name <n>      directory name under repos/ (default: derived from <url>)
+  --branch <b>    clone this branch instead of the remote default
+  --no-skills     do not print the skill-setup reminder
+  -y, --yes       assume yes to prompts
+  -h, --help      show this help
+
+Clones a repository into repos/<name>, pins its default branch, and creates
+worktrees/<name>. Prints the clone path on stdout.'
+
+url=
+name=
+branch=
+skills=1
+
+while [ $# -gt 0 ]; do
+  case $1 in
+    --name)      shift; [ $# -gt 0 ] || usage_die "--name needs a value"; name=$1 ;;
+    --name=*)    name=${1#--name=} ;;
+    --branch)    shift; [ $# -gt 0 ] || usage_die "--branch needs a value"; branch=$1 ;;
+    --branch=*)  branch=${1#--branch=} ;;
+    --no-skills) skills=0 ;;
+    -y|--yes)    WORKFLOW_YES=1; export WORKFLOW_YES ;;
+    -h|--help)   printf '%s\n' "$USAGE"; exit 0 ;;
+    --)          shift; break ;;
+    -*)          usage_die "unknown option: $1" ;;
+    *)
+      if [ -z "$url" ]; then url=$1
+      elif [ -z "$name" ]; then name=$1
+      else usage_die "unexpected argument: $1"
+      fi
+      ;;
+  esac
+  shift
+done
+
+while [ $# -gt 0 ]; do
+  if [ -z "$url" ]; then url=$1
+  elif [ -z "$name" ]; then name=$1
+  else usage_die "unexpected argument: $1"
+  fi
+  shift
+done
+
+[ -n "$url" ] || usage_die "missing <url>"
+
+ws_require_workspace
+
+if [ -z "$name" ]; then
+  name=${url%/}
+  name=${name##*/}
+  name=${name%.git}
+fi
+
+case $name in
+  ''|*[!A-Za-z0-9._-]*)
+    die 2 "cannot use '$name' as a directory name" \
+          "pass an explicit name: repo-add $url <name>"
+    ;;
+esac
+
+repo_dir=$REPOS_DIR/$name
+
+if [ -e "$repo_dir" ]; then
+  die 4 "repos/$name already exists"
+fi
+
+log_step "cloning $url into repos/$name"
+mkdir -p "$REPOS_DIR"
+
+# git clone removes its own partial directory on failure. This script never
+# deletes anything itself.
+if [ -n "$branch" ]; then
+  git clone --branch "$branch" "$url" "$repo_dir" || die 7 "clone failed"
+else
+  git clone "$url" "$repo_dir" || die 7 "clone failed"
+fi
+
+# Pin refs/remotes/origin/HEAD now, while we are certainly online, so that
+# worktree-create can resolve a base branch later even without a network.
+git -C "$repo_dir" remote set-head origin --auto >/dev/null 2>&1 || \
+  log_warn "could not determine the remote default branch"
+
+base=$(ws_default_branch "$repo_dir" 2>/dev/null) || base='(unknown)'
+
+mkdir -p "$WORKTREES_DIR/$name"
+
+log_success "repos/$name ready"
+log_info "base branch  $base"
+log_info "worktrees    worktrees/$name/"
+
+if confirm "Write .workflow/post-create and pre-retire stubs into repos/$name?" n; then
+  mkdir -p "$repo_dir/.workflow"
+  for event in post-create pre-retire; do
+    if [ -e "$repo_dir/.workflow/$event" ]; then
+      log_warn ".workflow/$event already exists; left alone"
+      continue
+    fi
+    {
+      printf '%s\n' '#!/usr/bin/env bash'
+      printf '%s\n' 'set -euo pipefail'
+      printf '\n'
+      printf '# %s hook. Runs with the worktree as the working directory.\n' "$event"
+      printf '# Available: WORKFLOW_REPO WORKFLOW_BRANCH WORKFLOW_SLUG WORKFLOW_WORKTREE\n'
+      printf '#            WORKFLOW_REPO_DIR WORKFLOW_SCRATCH WORKFLOW_SCOPE WORKFLOW_FORCE\n'
+      printf '# A branch database is conventionally "${WORKFLOW_REPO}_${WORKFLOW_SLUG}".\n'
+    } > "$repo_dir/.workflow/$event"
+    chmod +x "$repo_dir/.workflow/$event"
+    log_info "wrote .workflow/$event"
+  done
+  log_detail "commit these so every worktree and every teammate gets them"
+fi
+
+if [ "$skills" = 1 ]; then
+  log_step "next: configure agent skills from inside the clone"
+  log_info "cd repos/$name"
+  log_info "npx skills add mattpocock/skills@setup-matt-pocock-skills"
+  log_info "then run /setup-matt-pocock-skills there"
+  log_detail "run it inside repos/$name, not at the workspace root: it writes to"
+  log_detail "the repository, so every worktree and every PR inherits the result"
+fi
+
+printf '%s\n' "$repo_dir"

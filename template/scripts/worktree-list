@@ -1,0 +1,244 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+_self=${BASH_SOURCE[0]}
+while [ -L "$_self" ]; do
+  _dir=$(cd -P "$(dirname -- "$_self")" && pwd)
+  _self=$(readlink -- "$_self")
+  case $_self in
+    /*) ;;
+    *)  _self=$_dir/$_self ;;
+  esac
+done
+SCRIPT_DIR=$(cd -P "$(dirname -- "$_self")" && pwd)
+
+# shellcheck source=./lib/workspace.sh
+. "$SCRIPT_DIR/lib/workspace.sh"
+
+USAGE='Usage: worktree-list [options] [<repo>...]
+
+      --pr / --no-pr   pull request column (default: on when gh is usable)
+      --fetch          fetch each repository first
+      --all            include the main clones
+      --porcelain      tab separated, uncoloured, no header
+  -h, --help           show this help
+
+Touches the network only with --fetch or the pull request column.
+
+--porcelain fields, in order and stable:
+  repo  branch  dirname  path  dirty  ahead  behind  upstream  pr  pr_state'
+
+want_pr=auto
+do_fetch=0
+show_all=0
+porcelain=0
+names=
+
+while [ $# -gt 0 ]; do
+  case $1 in
+    --pr)        want_pr=1 ;;
+    --no-pr)     want_pr=0 ;;
+    --fetch)     do_fetch=1 ;;
+    --all)       show_all=1 ;;
+    --porcelain) porcelain=1 ;;
+    -h|--help)   printf '%s\n' "$USAGE"; exit 0 ;;
+    --)          shift; break ;;
+    -*)          usage_die "unknown option: $1" ;;
+    *)           names=$names$1$'\n' ;;
+  esac
+  shift
+done
+
+while [ $# -gt 0 ]; do
+  names=$names$1$'\n'
+  shift
+done
+
+ws_require_workspace
+
+if [ "$porcelain" = 1 ]; then
+  want_pr=${want_pr/auto/0}
+fi
+
+if [ -z "$names" ]; then
+  names=$(ws_list_repos)
+  if [ -n "$names" ]; then
+    names=$names$'\n'
+  fi
+fi
+
+if [ -z "$names" ]; then
+  log_warn "no repositories under repos/"
+  exit 0
+fi
+
+pr_available=0
+if [ "$want_pr" != 0 ]; then
+  if ws_gh_ok; then
+    pr_available=1
+  elif [ "$want_pr" = 1 ]; then
+    log_warn "gh is unavailable or not authenticated; pull request column omitted"
+  fi
+fi
+
+rows=
+
+while IFS= read -r name; do
+  [ -n "$name" ] || continue
+  dir=$REPOS_DIR/$name
+  [ -e "$dir/.git" ] || continue
+
+  if [ "$do_fetch" = 1 ]; then
+    git -C "$dir" fetch --prune --quiet origin 2>/dev/null || \
+      log_warn "$name: fetch failed"
+  fi
+
+  branches=$(ws_branch_table "$dir")
+  pr_rows=
+  if [ "$pr_available" = 1 ]; then
+    pr_rows=$(ws_pr_table "$dir")
+  fi
+  main_path=$(ws_realpath "$dir")
+
+  while IFS=$'\t' read -r p b f; do
+    [ -n "$p" ] || continue
+
+    if [ "$show_all" != 1 ] && [ -d "$p" ] && [ "$(ws_realpath "$p")" = "$main_path" ]; then
+      continue
+    fi
+
+    dirname=${p##*/}
+    branch=${b:-'(detached)'}
+
+    upstream=
+    track=
+    if [ -n "$b" ]; then
+      line=$(printf '%s\n' "$branches" | awk -F'\t' -v n="$b" '$1 == n { print; exit }')
+      upstream=$(printf '%s' "$line" | cut -f2)
+      track=$(printf '%s' "$line" | cut -f3)
+    fi
+
+    ahead=0
+    behind=0
+    case $track in
+      *gone*)
+        ahead=-
+        behind=-
+        upstream=gone
+        ;;
+      *)
+        a=$(printf '%s' "$track" | sed -n 's/.*ahead \([0-9][0-9]*\).*/\1/p')
+        bh=$(printf '%s' "$track" | sed -n 's/.*behind \([0-9][0-9]*\).*/\1/p')
+        if [ -n "$a" ]; then ahead=$a; fi
+        if [ -n "$bh" ]; then behind=$bh; fi
+        ;;
+    esac
+    if [ -z "$upstream" ]; then
+      upstream='(none)'
+    fi
+
+    state=clean
+    dirty=0
+    case $f in
+      *locked*) state=locked ;;
+    esac
+    if [ ! -d "$p" ]; then
+      state=missing
+    elif [ "$state" = clean ] && ws_is_dirty "$p"; then
+      state=dirty
+      dirty=1
+    fi
+
+    pr_num='-'
+    pr_state='-'
+    if [ -n "$pr_rows" ] && [ -n "$b" ]; then
+      pr_line=$(printf '%s\n' "$pr_rows" | awk -F'\t' -v n="$b" '$1 == n { print; exit }')
+      if [ -n "$pr_line" ]; then
+        pr_num=$(printf '%s' "$pr_line" | cut -f2)
+        pr_state=$(printf '%s' "$pr_line" | cut -f3)
+      fi
+    fi
+
+    rows=$rows$name$'\t'$branch$'\t'$dirname$'\t'$p$'\t'$dirty$'\t'$ahead$'\t'$behind$'\t'$upstream$'\t'$pr_num$'\t'$pr_state$'\t'$state$'\n'
+  done <<EOT
+$(ws_worktree_records "$dir")
+EOT
+done <<EOT
+$names
+EOT
+
+if [ -z "$rows" ]; then
+  log_info "no worktrees; create one with: scripts/worktree-create <repo> <scope/branch>"
+  exit 0
+fi
+
+if [ "$porcelain" = 1 ]; then
+  while IFS=$'\t' read -r repo branch dirname path dirty ahead behind upstream pr pr_state state; do
+    [ -n "$repo" ] || continue
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$repo" "$branch" "$dirname" "$path" "$dirty" "$ahead" "$behind" \
+      "$upstream" "$pr" "$pr_state"
+  done <<EOT
+$rows
+EOT
+  exit 0
+fi
+
+w_repo=4
+w_branch=6
+w_dir=9
+w_state=5
+w_ab=12
+w_up=8
+while IFS=$'\t' read -r repo branch dirname path dirty ahead behind upstream pr pr_state state; do
+  [ -n "$repo" ] || continue
+  ab="+$ahead/-$behind"
+  if [ ${#repo} -gt $w_repo ]; then w_repo=${#repo}; fi
+  if [ ${#branch} -gt $w_branch ]; then w_branch=${#branch}; fi
+  if [ ${#dirname} -gt $w_dir ]; then w_dir=${#dirname}; fi
+  if [ ${#state} -gt $w_state ]; then w_state=${#state}; fi
+  if [ ${#ab} -gt $w_ab ]; then w_ab=${#ab}; fi
+  if [ ${#upstream} -gt $w_up ]; then w_up=${#upstream}; fi
+done <<EOT
+$rows
+EOT
+
+printf '%-*s  %-*s  %-*s  %-*s  %-*s  %-*s  %s\n' \
+  "$w_repo" REPO "$w_branch" BRANCH "$w_dir" DIRECTORY "$w_state" STATE \
+  "$w_ab" AHEAD/BEHIND "$w_up" UPSTREAM PR
+
+while IFS=$'\t' read -r repo branch dirname path dirty ahead behind upstream pr pr_state state; do
+  [ -n "$repo" ] || continue
+  ab="+$ahead/-$behind"
+
+  # Pad first, colour second: the escapes must not enter the width maths.
+  painted_state=$(printf '%-*s' "$w_state" "$state")
+  case $state in
+    dirty)          painted_state=$(PC_yellow "$painted_state") ;;
+    locked|missing) painted_state=$(PC_red "$painted_state") ;;
+    *)              painted_state=$(PC_dim "$painted_state") ;;
+  esac
+
+  painted_up=$(printf '%-*s' "$w_up" "$upstream")
+  case $upstream in
+    gone)     painted_up=$(PC_red "$painted_up") ;;
+    '(none)') painted_up=$(PC_dim "$painted_up") ;;
+  esac
+
+  if [ "$pr_state" = '-' ]; then
+    pr_cell=$(PC_dim '-')
+  else
+    case $pr_state in
+      MERGED) pr_cell="$pr $(PC_green "$pr_state")" ;;
+      OPEN)   pr_cell="$pr $(PC_cyan "$pr_state")" ;;
+      CLOSED) pr_cell="$pr $(PC_red "$pr_state")" ;;
+      *)      pr_cell="$pr $(PC_dim "$pr_state")" ;;
+    esac
+  fi
+
+  printf '%-*s  %-*s  %-*s  %s  %-*s  %s  %s\n' \
+    "$w_repo" "$repo" "$w_branch" "$branch" "$w_dir" "$dirname" \
+    "$painted_state" "$w_ab" "$ab" "$painted_up" "$pr_cell"
+done <<EOT
+$rows
+EOT

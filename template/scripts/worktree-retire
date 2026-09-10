@@ -1,0 +1,285 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+_self=${BASH_SOURCE[0]}
+while [ -L "$_self" ]; do
+  _dir=$(cd -P "$(dirname -- "$_self")" && pwd)
+  _self=$(readlink -- "$_self")
+  case $_self in
+    /*) ;;
+    *)  _self=$_dir/$_self ;;
+  esac
+done
+SCRIPT_DIR=$(cd -P "$(dirname -- "$_self")" && pwd)
+
+# shellcheck source=./lib/workspace.sh
+. "$SCRIPT_DIR/lib/workspace.sh"
+
+USAGE='Usage: worktree-retire [options] [<repo>] [<branch|dirname>]
+
+      --force         retire despite uncommitted work, unpushed commits,
+                      a lock, or a failing pre-retire hook
+      --keep-branch   remove the worktree but keep the local branch
+      --no-archive    do not move scratch/active/<feature>
+      --no-fetch      do not fetch before judging "unpushed"
+      --no-hooks      skip .workflow/pre-retire
+  -y, --yes           assume yes to prompts
+  -h, --help          show this help
+
+With no arguments, retires the worktree containing the current directory.
+Does not delete the remote branch: that is your host'"'"'s delete-on-merge job.'
+
+force=0
+keep_branch=0
+archive=1
+fetch=1
+hooks=1
+positional=
+
+while [ $# -gt 0 ]; do
+  case $1 in
+    --force)       force=1 ;;
+    --keep-branch) keep_branch=1 ;;
+    --no-archive)  archive=0 ;;
+    --no-fetch)    fetch=0 ;;
+    --no-hooks)    hooks=0; WORKFLOW_NO_HOOKS=1; export WORKFLOW_NO_HOOKS ;;
+    -y|--yes)      WORKFLOW_YES=1; export WORKFLOW_YES ;;
+    -h|--help)     printf '%s\n' "$USAGE"; exit 0 ;;
+    --)            shift; break ;;
+    -*)            usage_die "unknown option: $1" ;;
+    *)             positional=$positional$1$'\n' ;;
+  esac
+  shift
+done
+
+while [ $# -gt 0 ]; do
+  positional=$positional$1$'\n'
+  shift
+done
+
+ws_require_workspace
+
+repo=
+target=
+count=0
+while IFS= read -r arg; do
+  [ -n "$arg" ] || continue
+  count=$((count + 1))
+  case $count in
+    1) repo=$arg ;;
+    2) target=$arg ;;
+    *) usage_die "unexpected argument: $arg" ;;
+  esac
+done <<EOT
+$positional
+EOT
+
+wt_dir=
+
+case $count in
+  0)
+    cur=$(ws_realpath "$PWD")
+    case $cur in
+      "$WORKTREES_DIR"/*)
+        rel=${cur#"$WORKTREES_DIR"/}
+        repo=${rel%%/*}
+        rest=${rel#*/}
+        name=${rest%%/*}
+        wt_dir=$WORKTREES_DIR/$repo/$name
+        ;;
+      *)
+        usage_die "run this from inside a worktree, or name one: worktree-retire <repo> <branch>"
+        ;;
+    esac
+    ;;
+  1)
+    target=$repo
+    repo=$(ws_infer_repo) || die 2 \
+      "cannot tell which repository you mean" \
+      "pass it explicitly: worktree-retire <repo> $target"
+    ;;
+esac
+
+repo_dir=$(ws_repo_dir "$repo")
+
+if [ -z "$wt_dir" ]; then
+  # The second argument may be a branch (feat/login) or a directory (feat-login).
+  if [ -e "$WORKTREES_DIR/$repo/$target" ]; then
+    wt_dir=$WORKTREES_DIR/$repo/$target
+  else
+    wt_dir=$WORKTREES_DIR/$repo/$(ws_sanitize "$target")
+  fi
+fi
+
+wt_name=${wt_dir##*/}
+
+# Clear records left behind by hand-deleted directories before judging anything.
+git -C "$repo_dir" worktree prune
+
+flags=
+registered=0
+while IFS=$'\t' read -r p b f; do
+  [ -n "$p" ] || continue
+  if [ "$p" = "$wt_dir" ]; then
+    registered=1
+    flags=$f
+    break
+  fi
+done <<EOT
+$(ws_worktree_records "$repo_dir")
+EOT
+
+if [ ! -d "$wt_dir" ] && [ "$registered" != 1 ]; then
+  die 3 "no such worktree: $(ws_rel "$wt_dir")" \
+        "list what exists with: scripts/worktree-list $repo"
+fi
+
+if [ -d "$wt_dir" ]; then
+  branch=$(git -C "$wt_dir" symbolic-ref --quiet --short HEAD 2>/dev/null) || branch=
+else
+  branch=
+fi
+
+if [ -z "$branch" ]; then
+  if [ -d "$wt_dir" ] && [ "$force" != 1 ]; then
+    die 4 "$(ws_rel "$wt_dir") is on a detached HEAD" \
+          "pass --force to retire it anyway"
+  fi
+  branch=$target
+fi
+
+log_step "retiring $repo ${branch:-$wt_name}"
+log_info "path     $(ws_rel "$wt_dir")"
+
+# --- preflight ---------------------------------------------------------------
+
+case $flags in
+  *locked*)
+    if [ "$force" != 1 ]; then
+      die 4 "$(ws_rel "$wt_dir") is locked" "pass --force to unlock and retire it"
+    fi
+    git -C "$repo_dir" worktree unlock "$wt_dir" 2>/dev/null || true
+    ;;
+esac
+
+if [ -d "$wt_dir" ]; then
+  if [ "$fetch" = 1 ]; then
+    if git -C "$repo_dir" remote get-url origin >/dev/null 2>&1; then
+      git -C "$repo_dir" fetch --prune --quiet origin || \
+        log_warn "fetch failed; 'unpushed' may be judged against stale refs"
+    fi
+  fi
+
+  if ws_is_dirty "$wt_dir"; then
+    if [ "$force" != 1 ]; then
+      log_error "$(ws_rel "$wt_dir") has uncommitted changes"
+      git --no-optional-locks -C "$wt_dir" status --short | head -n 10 >&2
+      die 4 "commit, stash, or pass --force"
+    fi
+    log_warn "retiring a dirty worktree because of --force"
+  fi
+
+  unpushed=$(ws_unpushed_count "$wt_dir")
+  if [ "$unpushed" -gt 0 ]; then
+    if [ "$force" != 1 ]; then
+      log_error "$unpushed commit(s) on $branch are not on any origin ref"
+      git -C "$wt_dir" log --oneline HEAD --not --remotes=origin | head -n 10 >&2
+      die 4 "push them, or pass --force"
+    fi
+    log_warn "retiring with $unpushed unpushed commit(s) because of --force"
+  fi
+
+  if [ -n "$(git -C "$wt_dir" stash list 2>/dev/null)" ]; then
+    # The stash ref is repository-global; it survives the worktree.
+    log_warn "this repository has stashed changes; they are kept"
+  fi
+fi
+
+if ! confirm "Retire $branch ($(ws_rel "$wt_dir"))?" n; then
+  die 6 "cancelled"
+fi
+
+# --- hook --------------------------------------------------------------------
+
+if [ "$hooks" = 1 ] && [ -d "$wt_dir" ]; then
+  WORKFLOW_FORCE=$force
+  export WORKFLOW_FORCE
+  ws_hook_env pre-retire "$repo" "$repo_dir" "$branch" "$wt_dir"
+  if ! ws_run_hook pre-retire; then
+    if [ "$force" != 1 ]; then
+      log_error "pre-retire hook failed"
+      log_info "nothing was removed; the hook is the only thing that can tear down"
+      log_info "branch resources, and it cannot be retried once the worktree is gone"
+      exit 5
+    fi
+    log_warn "pre-retire hook failed; continuing because of --force"
+  fi
+fi
+
+# --- remove ------------------------------------------------------------------
+
+cd "$WORKSPACE_ROOT"
+
+if [ "$registered" = 1 ] || [ -d "$wt_dir" ]; then
+  if [ "$force" = 1 ]; then
+    git -C "$repo_dir" worktree remove --force "$wt_dir" 2>/dev/null || \
+      log_warn "git worktree remove failed; pruning the record"
+  else
+    git -C "$repo_dir" worktree remove "$wt_dir" 2>/dev/null || \
+      log_warn "git worktree remove failed; pruning the record"
+  fi
+fi
+git -C "$repo_dir" worktree prune
+
+if [ -d "$wt_dir" ]; then
+  log_warn "$(ws_rel "$wt_dir") is still on disk; remove it yourself if you meant to"
+else
+  log_success "removed $(ws_rel "$wt_dir")"
+fi
+
+# --- local branch ------------------------------------------------------------
+
+if [ "$keep_branch" != 1 ] && git -C "$repo_dir" show-ref --verify --quiet "refs/heads/$branch"; then
+  if git -C "$repo_dir" branch -d "$branch" >/dev/null 2>&1; then
+    log_success "deleted branch $branch"
+  else
+    # git branch -d always refuses a squash-merged branch: the squashed commit
+    # on the base branch is a different object. A merged PR is better evidence.
+    pr_state=$(ws_pr_state "$repo_dir" "$branch") || pr_state=
+    if [ "$force" = 1 ]; then
+      git -C "$repo_dir" branch -D "$branch" >/dev/null
+      log_success "deleted branch $branch (forced)"
+    elif [ "$pr_state" = MERGED ]; then
+      git -C "$repo_dir" branch -D "$branch" >/dev/null
+      log_success "deleted squash-merged branch $branch"
+    elif confirm "branch $branch is not merged; delete it anyway?" n; then
+      git -C "$repo_dir" branch -D "$branch" >/dev/null
+      log_success "deleted branch $branch"
+    else
+      log_warn "kept local branch $branch"
+    fi
+  fi
+fi
+
+# --- scratch -----------------------------------------------------------------
+
+if [ "$archive" = 1 ]; then
+  slug=$(ws_slug "$branch")
+  src=$SCRATCH_DIR/active/$slug
+  if [ -d "$src" ]; then
+    dst=$SCRATCH_DIR/archive/$slug
+    if [ -e "$dst" ]; then
+      # Never merge into an existing archive; keep both.
+      dst=$dst-$(date +%Y%m%d%H%M%S)
+    fi
+    if confirm "Archive scratch/active/$slug -> $(ws_rel "$dst")?" y; then
+      mkdir -p "$SCRATCH_DIR/archive"
+      mv "$src" "$dst"
+      log_success "archived $(ws_rel "$dst")"
+    else
+      log_info "left scratch/active/$slug in place"
+    fi
+  fi
+fi
+
+log_detail "your shell may be inside a removed directory; run: cd $WORKSPACE_ROOT"
