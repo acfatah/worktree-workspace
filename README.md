@@ -1,15 +1,16 @@
-# Workflow Using Worktree
+# Worktree Workspace
 
-Comprehensive workflow guide on using git worktree for development with AI
-integration.
+A workspace scaffold for multi-repository development with git worktree and
+AI agents. One main clone per repository, one worktree per branch, and a
+scratch area that outlives both.
 
 ## Quick Start
 
-Create a new directory then run the following command to set up the workflow
-template:
+Create a new directory then run the following command to set up the
+workspace:
 
 ```bash
-bunx gitpick acfatah/workflow-using-worktree/tree/main/template .
+bunx gitpick acfatah/worktree-workspace/tree/main/template .
 ```
 
 If the copy did not preserve executable bits, run `chmod +x scripts/*` once.
