@@ -103,252 +103,128 @@ make_origin() {
 make_origin app main
 make_origin legacy master
 
+# A second remote branch, to check that repo-add does not keep a stale local
+# copy of it.
+( cd "$TEST_ROOT/seed-app" && git switch -qc feat/extra && git commit -q --allow-empty -m extra \
+    && git push -q origin feat/extra && git switch -q main )
+
 WS=$TEST_ROOT/ws
 mkdir -p "$WS"
 cp -R "$REPO_ROOT/template/." "$WS/"
 
 wt() { ( cd "$WS" && ./scripts/"$@" ); }
 
+# lib FUNCTION ARGS... - call a workspace.sh helper inside the test workspace.
+lib() {
+  ( WORKSPACE_ROOT=$WS; . "$WS/scripts/lib/workspace.sh"; "$@" )
+}
+
 # ------------------------------------------------------------------------------
 # repo-add
 # ------------------------------------------------------------------------------
 
-out=$(wt repo-add --no-skills "file://$TEST_ROOT/origin/app.git" app 2>/dev/null)
+out=$(wt repo-add "file://$TEST_ROOT/origin/app.git" app 2>"$TEST_ROOT/repo-add.err")
 rc=$?
-check "repo-add clones into repos/app" \
-  "$( [ "$rc" = 0 ] && [ -e "$WS/repos/app/.git" ] && [ "$out" = "$WS/repos/app" ]; echo $? )" \
+APP=$WS/repos/app.git
+check "repo-add clones into repos/app.git" \
+  "$( [ "$rc" = 0 ] && [ "$out" = "$APP" ]; echo $? )" \
   "rc=$rc out=$out"
 
-check "repo-add creates worktrees/app" "$( [ -d "$WS/worktrees/app" ]; echo $? )"
+bare=$(git -C "$APP" rev-parse --is-bare-repository 2>/dev/null)
+check "repo-add makes a bare clone" "$( [ "$bare" = true ]; echo $? )" "bare=$bare"
 
-wt repo-add --no-skills "file://$TEST_ROOT/origin/app.git" app >/dev/null 2>&1
+check "repo-add fetches origin/* refs" \
+  "$( git -C "$APP" rev-parse --verify --quiet refs/remotes/origin/main >/dev/null \
+      && git -C "$APP" rev-parse --verify --quiet refs/remotes/origin/feat/extra >/dev/null; echo $? )"
+
+head=$(git -C "$APP" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+check "repo-add pins origin/HEAD" "$( [ "$head" = origin/main ]; echo $? )" "origin/HEAD=$head"
+
+locals=$(git -C "$APP" for-each-ref --format='%(refname:short)' refs/heads/ | tr '\n' ' ')
+check "repo-add keeps only the default local branch" \
+  "$( [ "$locals" = 'main ' ]; echo $? )" "locals=$locals"
+
+up=$(git -C "$APP" for-each-ref --format='%(upstream:short)' refs/heads/main)
+check "the default local branch tracks origin" "$( [ "$up" = origin/main ]; echo $? )" "upstream=$up"
+
+check "repo-add creates no worktrees/ directory" "$( [ ! -e "$WS/worktrees/app" ]; echo $? )"
+
+check "repo-add says nothing about skills" \
+  "$( ! grep -qi skills "$TEST_ROOT/repo-add.err"; echo $? )" "$(cat "$TEST_ROOT/repo-add.err")"
+
+wt repo-add "file://$TEST_ROOT/origin/app.git" app >/dev/null 2>&1
 check "repo-add refuses an existing repo with exit 4" "$( [ $? = 4 ]; echo $? )"
 
-wt repo-add --no-skills "file://$TEST_ROOT/origin/legacy.git" legacy >/dev/null 2>&1
-check "repo-add handles a master-default repository" \
-  "$( [ -e "$WS/repos/legacy/.git" ]; echo $? )"
+wt repo-add "file://$TEST_ROOT/origin/app.git" 'bad name' >/dev/null 2>&1
+check "repo-add refuses a bad name with exit 2" "$( [ $? = 2 ]; echo $? )"
 
-# A local secret for the copy test.
-printf 'SECRET=local\n' > "$WS/repos/app/.env"
+wt repo-add "file://$TEST_ROOT/origin/legacy.git" legacy >/dev/null 2>&1
+default=$(lib ws_default_branch "$WS/repos/legacy.git" 2>/dev/null)
+check "repo-add detects a master default branch" \
+  "$( [ "$default" = master ]; echo $? )" "default=$default"
 
-# ------------------------------------------------------------------------------
-# worktree-create
-# ------------------------------------------------------------------------------
-
-out=$(wt worktree-create app feat/login 2>/dev/null)
-rc=$?
-check "worktree-create prints the path on stdout" \
-  "$( [ "$rc" = 0 ] && [ "$out" = "$WS/worktrees/app/feat-login" ]; echo $? )" "rc=$rc out=$out"
-
-check "worktree-create sanitizes the directory name" \
-  "$( [ -d "$WS/worktrees/app/feat-login" ]; echo $? )"
-
-branch=$(git -C "$WS/worktrees/app/feat-login" symbolic-ref --short HEAD)
-check "worktree-create checks out the branch" "$( [ "$branch" = feat/login ]; echo $? )" "branch=$branch"
-
-check "worktree-create copies ignored .env" \
-  "$( [ -f "$WS/worktrees/app/feat-login/.env" ]; echo $? )"
-
-check "worktree-create leaves tracked .env.example to the checkout" \
-  "$( [ -f "$WS/worktrees/app/feat-login/.env.example" ]; echo $? )"
-
-check "worktree-create links .scratch" \
-  "$( [ -d "$WS/worktrees/app/feat-login/.scratch" ]; echo $? )"
-
-check "worktree-create creates scratch/active/<feature>" \
-  "$( [ -d "$WS/scratch/active/login" ]; echo $? )"
-
-up=$(git -C "$WS/repos/app" for-each-ref --format='%(upstream:short)' refs/heads/feat/login)
-check "a new branch gets no upstream until it is pushed" "$( [ -z "$up" ]; echo $? )" "upstream=$up"
-
-wt worktree-create app fix/typo >/dev/null 2>&1
-count=$(grep -cxF '.scratch' "$WS/repos/app/.git/info/exclude" 2>/dev/null || echo 0)
-check "two creates leave exactly one .scratch line in the shared exclude file" \
-  "$( [ "$count" = 1 ]; echo $? )" "count=$count"
-
-wt worktree-create app feat/login >/dev/null 2>&1
-check "re-creating the same worktree is an idempotent exit 0" "$( [ $? = 0 ]; echo $? )"
-
-wt worktree-create nosuch feat/x >/dev/null 2>&1
-check "an unknown repository exits 3" "$( [ $? = 3 ]; echo $? )"
-
-wt worktree-create app 'bad..name' >/dev/null 2>&1
-check "an invalid branch name exits 2" "$( [ $? = 2 ]; echo $? )"
+wt repo-add --branch feat/extra "file://$TEST_ROOT/origin/app.git" app2 >/dev/null 2>&1
+base=$(git -C "$WS/repos/app2.git" config --get workflow.baseBranch)
+default=$(lib ws_default_branch "$WS/repos/app2.git" 2>/dev/null)
+check "repo-add --branch records the base branch" \
+  "$( [ "$base" = feat/extra ] && [ "$default" = feat/extra ]; echo $? )" \
+  "workflow.baseBranch=$base default=$default"
+rm -rf "$WS/repos/app2.git"
 
 # ------------------------------------------------------------------------------
-# Hooks
+# Library helpers
 # ------------------------------------------------------------------------------
 
-mkdir -p "$WS/repos/app/.workflow"
-cat > "$WS/repos/app/.workflow/post-create" <<'HOOK'
-#!/usr/bin/env bash
-set -euo pipefail
-env | grep '^WORKFLOW_' | sort > "$WORKFLOW_ROOT/hook-env.txt"
-pwd > "$WORKFLOW_ROOT/hook-cwd.txt"
-HOOK
-chmod +x "$WS/repos/app/.workflow/post-create"
+repos=$(lib ws_list_repos | tr '\n' ' ')
+check "ws_list_repos names bare repos without .git" \
+  "$( [ "$repos" = 'app legacy ' ]; echo $? )" "repos=$repos"
 
-wt worktree-create app feat/hooked >/dev/null 2>&1
-check "post-create runs" "$( [ -f "$WS/hook-env.txt" ]; echo $? )"
+check "ws_repo_dir resolves to repos/<name>.git" \
+  "$( [ "$(lib ws_repo_dir app 2>/dev/null)" = "$APP" ]; echo $? )"
 
-check "post-create runs inside the worktree" \
-  "$( [ "$(cat "$WS/hook-cwd.txt" 2>/dev/null)" = "$WS/worktrees/app/feat-hooked" ]; echo $? )" \
-  "cwd=$(cat "$WS/hook-cwd.txt" 2>/dev/null)"
+lib ws_repo_dir nosuch >/dev/null 2>&1
+check "ws_repo_dir exits 3 for an unknown repository" "$( [ $? = 3 ]; echo $? )"
 
-check "post-create receives WORKFLOW_SLUG" \
-  "$( grep -qx 'WORKFLOW_SLUG=hooked' "$WS/hook-env.txt"; echo $? )" \
-  "$(cat "$WS/hook-env.txt" 2>/dev/null)"
+task=$(lib ws_task_name feat/login)
+check "ws_task_name turns / into -" "$( [ "$task" = feat-login ]; echo $? )" "task=$task"
 
-check "post-create receives WORKFLOW_BRANCH" \
-  "$( grep -qx 'WORKFLOW_BRANCH=feat/hooked' "$WS/hook-env.txt"; echo $? )"
+check "ws_task_dir and ws_wt_path build task paths" \
+  "$( [ "$(lib ws_task_dir feat-login)" = "$WS/tasks/feat-login" ] \
+      && [ "$(lib ws_wt_path feat-login app)" = "$WS/tasks/feat-login/app" ]; echo $? )"
 
-printf '#!/usr/bin/env bash\nexit 3\n' > "$WS/repos/app/.workflow/post-create"
-chmod +x "$WS/repos/app/.workflow/post-create"
-wt worktree-create app feat/badhook >/dev/null 2>&1
-rc=$?
-check "a failing post-create exits 5" "$( [ "$rc" = 5 ]; echo $? )" "rc=$rc"
-check "a failing post-create leaves the worktree in place" \
-  "$( [ -d "$WS/worktrees/app/feat-badhook" ]; echo $? )"
+mkdir -p "$WS/tasks/feat-login/app/src"
+inferred=$( cd "$WS/tasks/feat-login/app/src" && lib ws_infer_repo )
+check "ws_infer_repo reads the repo from a task worktree path" \
+  "$( [ "$inferred" = app ]; echo $? )" "inferred=$inferred"
+rm -rf "$WS/tasks/feat-login"
 
-printf '#!/usr/bin/env bash\nexit 0\n' > "$WS/repos/app/.workflow/post-create"
-chmod -x "$WS/repos/app/.workflow/post-create"
-wt worktree-create app feat/nonexec >/dev/null 2>&1
-check "a non-executable hook warns but succeeds" "$( [ $? = 0 ]; echo $? )"
-rm -rf "$WS/repos/app/.workflow"
+check "without workspace.conf the default branch is an env branch" \
+  "$( lib ws_is_env_branch main "$APP"; echo $? )"
 
-# ------------------------------------------------------------------------------
-# worktree-list
-# ------------------------------------------------------------------------------
+check "without workspace.conf other branches are not env branches" \
+  "$( ! lib ws_is_env_branch dev "$APP"; echo $? )"
 
-printf 'dirt\n' > "$WS/worktrees/app/fix-typo/scratchfile"
-rows=$(wt worktree-list --porcelain 2>/dev/null)
-rc=$?
-check "worktree-list --porcelain exits 0 without gh" "$( [ "$rc" = 0 ]; echo $? )"
-
-fields=$(printf '%s\n' "$rows" | head -n 1 | awk -F'\t' '{print NF}')
-check "worktree-list --porcelain emits 10 fields" "$( [ "$fields" = 10 ]; echo $? )" "fields=$fields"
-
-dirty=$(printf '%s\n' "$rows" | awk -F'\t' '$2 == "fix/typo" { print $5 }')
-check "worktree-list reports a dirty worktree" "$( [ "$dirty" = 1 ]; echo $? )" "dirty=$dirty"
-
-pr=$(printf '%s\n' "$rows" | head -n 1 | cut -f10)
-check "the pull request column degrades to '-' without gh" "$( [ "$pr" = '-' ]; echo $? )" "pr=$pr"
-
-# ------------------------------------------------------------------------------
-# worktree-retire
-# ------------------------------------------------------------------------------
-
-wt worktree-retire app fix/typo >/dev/null 2>&1
-rc=$?
-check "retiring a dirty worktree exits 4" "$( [ "$rc" = 4 ]; echo $? )" "rc=$rc"
-check "a dirty worktree survives a refused retire" \
-  "$( [ -d "$WS/worktrees/app/fix-typo" ]; echo $? )"
-
-git -C "$WS/worktrees/app/feat-login" commit -q --allow-empty -m work
-wt worktree-retire app feat/login >/dev/null 2>&1
-rc=$?
-check "retiring with unpushed commits exits 4" "$( [ "$rc" = 4 ]; echo $? )" "rc=$rc"
-
-wt worktree-retire --force app fix/typo >/dev/null 2>&1
-check "--force retires a dirty worktree" \
-  "$( [ ! -d "$WS/worktrees/app/fix-typo" ]; echo $? )"
-
-git -C "$WS/worktrees/app/feat-login" push -q -u origin feat/login
-wt worktree-retire app feat/login >/dev/null 2>&1
-rc=$?
-check "retiring a pushed worktree succeeds" "$( [ "$rc" = 0 ]; echo $? )" "rc=$rc"
-check "retire removes the worktree" "$( [ ! -d "$WS/worktrees/app/feat-login" ]; echo $? )"
-check "retire archives the scratch directory" "$( [ -d "$WS/scratch/archive/login" ]; echo $? )"
-check "retire empties scratch/active" "$( [ ! -d "$WS/scratch/active/login" ]; echo $? )"
-
-# Same feature again: the archive must not be merged into.
-wt worktree-create app feat/login >/dev/null 2>&1
-wt worktree-retire --force app feat/login >/dev/null 2>&1
-stamped=$(ls -d "$WS"/scratch/archive/login-* 2>/dev/null | head -n 1)
-check "a second archive of the same feature is timestamped" \
-  "$( [ -n "$stamped" ]; echo $? )" "archive: $(ls "$WS/scratch/archive" | tr '\n' ' ')"
-
-# Ignored plan links in the worktree must not vanish with it.
-wt worktree-create app feat/planned >/dev/null 2>&1
-wt_planned=$WS/worktrees/app/feat-planned
-mkdir -p "$wt_planned/.claude/plans/completed"
-printf '# done\n' > "$wt_planned/.claude/plans/completed/old.md"
-printf '# live\n' > "$TEST_ROOT/live-plan.md"
-ln -s "$TEST_ROOT/live-plan.md" "$wt_planned/.claude/plans/live.md"
-printf '.claude/plans/\n' >> "$(git -C "$wt_planned" rev-parse --git-path info/exclude)"
-git -C "$wt_planned" push -q -u origin feat/planned
-wt worktree-retire app feat/planned >/dev/null 2>&1
-rc=$?
-check "retiring with ignored .claude/plans/ succeeds" "$( [ "$rc" = 0 ]; echo $? )" "rc=$rc"
-check "retire rescues completed plans into the scratch archive" \
-  "$( [ -f "$WS/scratch/archive/planned/plans/completed/old.md" ]; echo $? )"
-check "retire keeps rescued plan links as symlinks" \
-  "$( [ -L "$WS/scratch/archive/planned/plans/live.md" ]; echo $? )"
-
-mkdir -p "$WS/repos/app/.workflow"
-printf '#!/usr/bin/env bash\nexit 4\n' > "$WS/repos/app/.workflow/pre-retire"
-chmod +x "$WS/repos/app/.workflow/pre-retire"
-wt worktree-create app feat/keepme >/dev/null 2>&1
-wt worktree-retire app feat/keepme >/dev/null 2>&1
-rc=$?
-check "a failing pre-retire exits 5" "$( [ "$rc" = 5 ]; echo $? )" "rc=$rc"
-check "a failing pre-retire leaves the worktree in place" \
-  "$( [ -d "$WS/worktrees/app/feat-keepme" ]; echo $? )"
-rm -rf "$WS/repos/app/.workflow"
-wt worktree-retire --force app feat/keepme >/dev/null 2>&1
+printf 'ENV_BRANCHES="main dev"\n' > "$WS/workspace.conf"
+check "ENV_BRANCHES in workspace.conf adds env branches" \
+  "$( lib ws_is_env_branch dev "$APP" && ! lib ws_is_env_branch feat/x "$APP"; echo $? )"
+rm -f "$WS/workspace.conf"
 
 # ------------------------------------------------------------------------------
 # sync-repos
 # ------------------------------------------------------------------------------
 
 ( cd "$TEST_ROOT/seed-app" && git commit -q --allow-empty -m upstream && git push -q origin main )
-before=$(git -C "$WS/repos/app" rev-parse HEAD)
+want=$(git -C "$TEST_ROOT/seed-app" rev-parse HEAD)
 wt sync-repos >/dev/null 2>&1
 rc=$?
-after=$(git -C "$WS/repos/app" rev-parse HEAD)
-check "sync-repos fast-forwards the main clone" \
-  "$( [ "$rc" = 0 ] && [ "$before" != "$after" ]; echo $? )" "rc=$rc"
+got=$(git -C "$APP" rev-parse refs/remotes/origin/main)
+check "sync-repos fetches new commits into origin/*" \
+  "$( [ "$rc" = 0 ] && [ "$want" = "$got" ]; echo $? )" "rc=$rc want=$want got=$got"
 
-git -C "$WS/repos/app" commit -q --allow-empty -m divergent
-before=$(git -C "$WS/repos/app" rev-parse HEAD)
-( cd "$TEST_ROOT/seed-app" && git commit -q --allow-empty -m more && git push -q origin main )
+git -C "$TEST_ROOT/seed-app" push -q origin --delete feat/extra
 wt sync-repos >/dev/null 2>&1
-rc=$?
-after=$(git -C "$WS/repos/app" rev-parse HEAD)
-check "a divergent main clone fails with exit 7 and is not rewritten" \
-  "$( [ "$rc" = 7 ] && [ "$before" = "$after" ]; echo $? )" "rc=$rc"
-
-git -C "$WS/repos/app" reset -q --hard origin/main
-
-printf 'dirt\n' > "$WS/repos/app/untracked"
-wt sync-repos >/dev/null 2>&1
-check "a dirty main clone is skipped, not failed" "$( [ $? = 0 ]; echo $? )"
-rm -f "$WS/repos/app/untracked"
-
-# ------------------------------------------------------------------------------
-# worktree-prune
-# ------------------------------------------------------------------------------
-
-wt worktree-create app feat/landed >/dev/null 2>&1
-git -C "$WS/worktrees/app/feat-landed" commit -q --allow-empty -m landed
-git -C "$WS/worktrees/app/feat-landed" push -q -u origin feat/landed
-git -C "$WS/worktrees/app/feat-landed" push -q origin HEAD:main
-git -C "$WS/repos/app" push -q origin --delete feat/landed
-
-wt worktree-prune >/dev/null 2>&1
-rc=$?
-check "worktree-prune dry run exits 0" "$( [ "$rc" = 0 ]; echo $? )" "rc=$rc"
-check "worktree-prune dry run removes nothing" \
-  "$( [ -d "$WS/worktrees/app/feat-landed" ]; echo $? )"
-
-wt worktree-prune --yes >/dev/null 2>&1
-check "worktree-prune --yes retires the merged worktree" \
-  "$( [ ! -d "$WS/worktrees/app/feat-landed" ]; echo $? )"
-
-wt worktree-create app feat/fresh >/dev/null 2>&1
-wt worktree-prune --yes >/dev/null 2>&1
-check "worktree-prune keeps a branch with no commits yet" \
-  "$( [ -d "$WS/worktrees/app/feat-fresh" ]; echo $? )"
+check "sync-repos prunes deleted remote branches" \
+  "$( ! git -C "$APP" rev-parse --verify --quiet refs/remotes/origin/feat/extra >/dev/null; echo $? )"
 
 # ------------------------------------------------------------------------------
 # Lint
@@ -363,10 +239,10 @@ done
 check "every script parses" "$( [ -z "$syntax_bad" ]; echo $? )" "bad:$syntax_bad"
 
 if command -v shellcheck >/dev/null 2>&1; then
-  if shellcheck -x "$REPO_ROOT"/template/scripts/* "$REPO_ROOT"/template/scripts/lib/*.sh >/dev/null 2>&1; then
+  if shellcheck -x -P SCRIPTDIR "$REPO_ROOT"/template/scripts/* "$REPO_ROOT"/template/scripts/lib/*.sh >/dev/null 2>&1; then
     check "shellcheck is clean" 0
   else
-    check "shellcheck is clean" 1 "run: shellcheck -x template/scripts/* template/scripts/lib/*.sh"
+    check "shellcheck is clean" 1 "run: shellcheck -x -P SCRIPTDIR template/scripts/* template/scripts/lib/*.sh"
   fi
 fi
 

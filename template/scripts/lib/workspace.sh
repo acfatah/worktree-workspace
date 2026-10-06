@@ -4,9 +4,9 @@
 # Shared helpers for the workspace scripts.
 #
 # The workspace root is derived from this file's own location, not from the
-# current directory: the scripts are invoked from inside worktrees, from repos/,
-# and from outside the workspace entirely, and an upward walk guesses wrong in
-# all three cases. Set WORKSPACE_ROOT to override.
+# current directory: the scripts are invoked from inside task worktrees, from
+# repos/, and from outside the workspace entirely, and an upward walk guesses
+# wrong in all three cases. Set WORKSPACE_ROOT to override.
 # ==============================================================================
 
 _ws_lib_dir=$(cd -P "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -14,13 +14,36 @@ _ws_lib_dir=$(cd -P "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=./log.sh
 . "$_ws_lib_dir/log.sh"
 
-WORKSPACE_ROOT=${WORKSPACE_ROOT:-$(cd -P "$_ws_lib_dir/../.." && pwd)}
-REPOS_DIR=$WORKSPACE_ROOT/repos
-WORKTREES_DIR=$WORKSPACE_ROOT/worktrees
-SCRATCH_DIR=$WORKSPACE_ROOT/scratch
-DOCS_DIR=$WORKSPACE_ROOT/docs
+# Not every script uses every directory.
+# shellcheck disable=SC2034
+{
+  WORKSPACE_ROOT=${WORKSPACE_ROOT:-$(cd -P "$_ws_lib_dir/../.." && pwd)}
+  REPOS_DIR=$WORKSPACE_ROOT/repos
+  TASKS_DIR=$WORKSPACE_ROOT/tasks
+  ARCHIVE_DIR=$WORKSPACE_ROOT/archive
+  SHARED_DIR=$WORKSPACE_ROOT/shared
+  DOCS_DIR=$WORKSPACE_ROOT/docs
+  WORKSPACE_CONF=$WORKSPACE_ROOT/workspace.conf
+}
 
 export WORKSPACE_ROOT
+
+# ------------------------------------------------------------------------------
+# Configuration
+# ------------------------------------------------------------------------------
+
+# ws_load_conf - source workspace.conf, if present. It is optional and created
+# on demand; every key has a default here.
+ws_load_conf() {
+  if [ -f "$WORKSPACE_CONF" ]; then
+    # shellcheck source=/dev/null
+    . "$WORKSPACE_CONF"
+  fi
+  # Space-separated env branches. Empty means "each repo's default branch".
+  ENV_BRANCHES=${ENV_BRANCHES:-}
+}
+
+ws_load_conf
 
 # ------------------------------------------------------------------------------
 # Paths
@@ -52,13 +75,14 @@ ws_realpath() {
   fi
 }
 
-# ws_sanitize BRANCH - the worktree directory name for a branch.
+# ws_sanitize BRANCH - the branch with every "/" turned into "-".
 ws_sanitize() {
   local b=$1
   printf '%s\n' "${b//\//-}"
 }
 
-# ws_slug BRANCH - the branch with its scope stripped; the scratch feature name.
+# ws_slug BRANCH - the branch with its scope stripped; the per-branch resource
+# name hooks use, such as a database suffix.
 ws_slug() {
   local b=$1 s
   s=${b#*/}
@@ -74,9 +98,19 @@ ws_scope() {
   esac
 }
 
-# ws_wt_path REPO BRANCH
+# ws_task_name BRANCH - the task folder name: feat/login is tasks/feat-login.
+ws_task_name() {
+  ws_sanitize "$1"
+}
+
+# ws_task_dir TASK
+ws_task_dir() {
+  printf '%s\n' "$TASKS_DIR/$1"
+}
+
+# ws_wt_path TASK REPO - the task's worktree of REPO.
 ws_wt_path() {
-  printf '%s\n' "$WORKTREES_DIR/$1/$(ws_sanitize "$2")"
+  printf '%s\n' "$TASKS_DIR/$1/$2"
 }
 
 # ws_rel PATH - path relative to the workspace root, for display.
@@ -92,33 +126,34 @@ ws_rel() {
 # Repositories
 # ------------------------------------------------------------------------------
 
-# ws_list_repos - one repository name per line.
+# ws_list_repos - one repository name per line, without the .git suffix.
 ws_list_repos() {
   local d name
   if [ ! -d "$REPOS_DIR" ]; then
     return 0
   fi
-  for d in "$REPOS_DIR"/*/; do
-    # .git is a file in a worktree and a directory in a clone; -e covers both.
-    if [ -e "${d}.git" ]; then
+  for d in "$REPOS_DIR"/*.git/; do
+    # A bare repository has HEAD at its top level.
+    if [ -f "${d}HEAD" ]; then
       name=${d%/}
-      printf '%s\n' "${name##*/}"
+      name=${name##*/}
+      printf '%s\n' "${name%.git}"
     fi
   done
 }
 
-# ws_repo_dir NAME - print repos/NAME, or die 3 listing what does exist.
+# ws_repo_dir NAME - print repos/NAME.git, or die 3 listing what does exist.
 ws_repo_dir() {
   local name=$1 known
   if [ -z "$name" ]; then
     die 2 "missing <repo> argument"
   fi
-  if [ ! -e "$REPOS_DIR/$name/.git" ]; then
+  if [ ! -f "$REPOS_DIR/$name.git/HEAD" ]; then
     known=$(ws_list_repos | tr '\n' ' ')
-    die 3 "no such repository: repos/$name" \
+    die 3 "no such repository: repos/$name.git" \
           "known repositories: ${known:-<none; run scripts/repo-add <url>>}"
   fi
-  printf '%s\n' "$REPOS_DIR/$name"
+  printf '%s\n' "$REPOS_DIR/$name.git"
 }
 
 # ws_infer_repo - the repo implied by the current directory, or the only one.
@@ -128,11 +163,13 @@ ws_infer_repo() {
   case $cur in
     "$REPOS_DIR"/*)
       rel=${cur#"$REPOS_DIR"/}
-      printf '%s\n' "${rel%%/*}"
+      rel=${rel%%/*}
+      printf '%s\n' "${rel%.git}"
       return 0
       ;;
-    "$WORKTREES_DIR"/*)
-      rel=${cur#"$WORKTREES_DIR"/}
+    "$TASKS_DIR"/*/*)
+      # tasks/<task>/<repo>/...
+      rel=${cur#"$TASKS_DIR"/*/}
       printf '%s\n' "${rel%%/*}"
       return 0
       ;;
@@ -192,6 +229,23 @@ ws_default_branch() {
   return 1
 }
 
+# ws_is_env_branch BRANCH REPO_DIR - is BRANCH a long-lived env branch (main,
+# dev, ...)? ENV_BRANCHES from workspace.conf decides; without it, only the
+# repo's default branch is one.
+ws_is_env_branch() {
+  local branch=$1 dir=$2 b
+  if [ -n "$ENV_BRANCHES" ]; then
+    for b in $ENV_BRANCHES; do
+      if [ "$b" = "$branch" ]; then
+        return 0
+      fi
+    done
+    return 1
+  fi
+  b=$(ws_default_branch "$dir" 2>/dev/null) || return 1
+  [ "$b" = "$branch" ]
+}
+
 # ws_base_ref REPO_DIR BRANCH - the start point git should branch from.
 ws_base_ref() {
   local dir=$1 b=$2
@@ -227,7 +281,7 @@ ws_unpushed_count() {
 #
 # Note: %(upstream:track) is empty both when a branch is in sync and when it has
 # no upstream at all; %(upstream:short) is what tells those apart. "[gone]" in
-# the track field is the deleted-remote-branch signal worktree-prune needs.
+# the track field is the deleted-remote-branch signal pruning needs.
 ws_branch_table() {
   git -C "$1" for-each-ref \
     --format='%(refname:short)%09%(upstream:short)%09%(upstream:track)%09%(worktreepath)' \
@@ -294,43 +348,44 @@ ws_pr_state() {
 # Lifecycle hooks
 # ------------------------------------------------------------------------------
 
-# ws_hook_env EVENT REPO REPO_DIR BRANCH WORKTREE [BASE_BRANCH]
+# ws_hook_env EVENT TASK REPO REPO_DIR BRANCH WORKTREE [BASE_BRANCH]
+#
+# WORKFLOW_REPO_DIR is the bare repository, repos/<repo>.git.
 ws_hook_env() {
   WORKFLOW_EVENT=$1
   WORKFLOW_ROOT=$WORKSPACE_ROOT
-  WORKFLOW_REPO=$2
-  WORKFLOW_REPO_DIR=$3
-  WORKFLOW_BRANCH=$4
-  WORKFLOW_WORKTREE=$5
-  WORKFLOW_BASE_BRANCH=${6:-}
+  WORKFLOW_TASK=$2
+  WORKFLOW_TASK_DIR=$(ws_task_dir "$WORKFLOW_TASK")
+  WORKFLOW_REPO=$3
+  WORKFLOW_REPO_DIR=$4
+  WORKFLOW_BRANCH=$5
+  WORKFLOW_WORKTREE=$6
+  WORKFLOW_BASE_BRANCH=${7:-}
   WORKFLOW_WORKTREE_NAME=$(ws_sanitize "$WORKFLOW_BRANCH")
   WORKFLOW_SCOPE=$(ws_scope "$WORKFLOW_BRANCH")
   WORKFLOW_SLUG=$(ws_slug "$WORKFLOW_BRANCH")
-  WORKFLOW_SCRATCH=$SCRATCH_DIR/active/$WORKFLOW_SLUG
   WORKFLOW_FORCE=${WORKFLOW_FORCE:-0}
 
-  export WORKFLOW_EVENT WORKFLOW_ROOT WORKFLOW_REPO WORKFLOW_REPO_DIR \
-         WORKFLOW_BRANCH WORKFLOW_WORKTREE WORKFLOW_BASE_BRANCH \
-         WORKFLOW_WORKTREE_NAME WORKFLOW_SCOPE WORKFLOW_SLUG \
-         WORKFLOW_SCRATCH WORKFLOW_FORCE
+  export WORKFLOW_EVENT WORKFLOW_ROOT WORKFLOW_TASK WORKFLOW_TASK_DIR \
+         WORKFLOW_REPO WORKFLOW_REPO_DIR WORKFLOW_BRANCH WORKFLOW_WORKTREE \
+         WORKFLOW_BASE_BRANCH WORKFLOW_WORKTREE_NAME WORKFLOW_SCOPE \
+         WORKFLOW_SLUG WORKFLOW_FORCE
 }
 
-# ws_run_hook EVENT - run repos/<repo>/.workflow/<event>, if it exists.
+# ws_run_hook EVENT - run <worktree>/.workflow/<event>, if it exists.
 #
-# The worktree's own copy wins over the main clone's, so a branch can change its
-# own setup. Output is never captured, so an interactive psql prompt still works.
+# Hooks come only from the worktree, committed with the branch: a bare
+# repository has no files on disk to fall back to. Output is never captured,
+# so an interactive psql prompt still works.
 ws_run_hook() {
-  local event=$1 hook=
+  local event=$1 hook
 
   if [ -n "${WORKFLOW_NO_HOOKS:-}" ]; then
     return 0
   fi
 
-  if [ -n "${WORKFLOW_WORKTREE:-}" ] && [ -e "$WORKFLOW_WORKTREE/.workflow/$event" ]; then
-    hook=$WORKFLOW_WORKTREE/.workflow/$event
-  elif [ -e "$WORKFLOW_REPO_DIR/.workflow/$event" ]; then
-    hook=$WORKFLOW_REPO_DIR/.workflow/$event
-  else
+  hook=$WORKFLOW_WORKTREE/.workflow/$event
+  if [ ! -e "$hook" ]; then
     return 0
   fi
 

@@ -22,8 +22,9 @@ USAGE='Usage: sync-repos [options] [<repo>...]
   --fail-fast     stop at the first failure
   -h, --help      show this help
 
-Fast-forwards every main clone under repos/. Never merges, rebases or resets:
-a repository that cannot fast-forward is reported, not rewritten.'
+Fetches every bare repository under repos/, so origin/* is current for new
+tasks. It never touches a worktree. Fast-forwarding env-task worktrees is not
+implemented yet.'
 
 prune=1
 tags=1
@@ -74,9 +75,9 @@ record() { rows=$rows$1$'\t'$2$'\t'$3$'\n'; }
 while IFS= read -r name; do
   [ -n "$name" ] || continue
 
-  dir=$REPOS_DIR/$name
-  if [ ! -e "$dir/.git" ]; then
-    log_warn "repos/$name is not a git repository"
+  dir=$REPOS_DIR/$name.git
+  if [ ! -f "$dir/HEAD" ]; then
+    log_warn "repos/$name.git is not a git repository"
     record "$name" skipped "not a git repository"
     n_skipped=$((n_skipped + 1))
     continue
@@ -94,6 +95,8 @@ while IFS= read -r name; do
   if [ "$prune" = 1 ]; then fetch_opts="$fetch_opts --prune"; fi
   if [ "$tags" = 1 ]; then fetch_opts="$fetch_opts --tags"; fi
 
+  before=$(git -C "$dir" for-each-ref --format='%(objectname) %(refname)' refs/remotes/origin/)
+
   # shellcheck disable=SC2086
   if ! git -C "$dir" fetch $fetch_opts --quiet origin; then
     record "$name" failed "fetch failed"
@@ -102,48 +105,13 @@ while IFS= read -r name; do
     continue
   fi
 
-  head=$(git -C "$dir" symbolic-ref --quiet --short HEAD 2>/dev/null) || head=
-  if [ -z "$head" ]; then
-    record "$name" skipped "detached HEAD"
-    n_skipped=$((n_skipped + 1))
-    continue
-  fi
-
-  if ws_is_dirty "$dir"; then
-    record "$name" skipped "uncommitted changes on $head"
-    n_skipped=$((n_skipped + 1))
-    continue
-  fi
-
-  default=$(ws_default_branch "$dir" 2>/dev/null) || default=
-  if [ -n "$default" ] && [ "$default" != "$head" ]; then
-    log_warn "main clone is on '$head', not the default branch '$default'"
-    # git refuses to fetch into a branch that is checked out anywhere, so this
-    # is a no-op in exactly the case where it would be dangerous.
-    git -C "$dir" fetch --quiet origin "$default:$default" 2>/dev/null || true
-  fi
-
-  if ! git -C "$dir" rev-parse --verify --quiet "$head@{upstream}" >/dev/null 2>&1; then
-    record "$name" skipped "no upstream for $head"
-    n_skipped=$((n_skipped + 1))
-    continue
-  fi
-
-  before=$(git -C "$dir" rev-parse --short HEAD)
-  if ! git -C "$dir" merge --ff-only --quiet "@{upstream}" 2>/dev/null; then
-    record "$name" failed "$head is not fast-forwardable"
-    n_failed=$((n_failed + 1))
-    if [ "$fail_fast" = 1 ]; then break; fi
-    continue
-  fi
-  after=$(git -C "$dir" rev-parse --short HEAD)
+  after=$(git -C "$dir" for-each-ref --format='%(objectname) %(refname)' refs/remotes/origin/)
 
   if [ "$before" = "$after" ]; then
-    record "$name" up-to-date "$head"
+    record "$name" up-to-date "origin/*"
     n_current=$((n_current + 1))
   else
-    count=$(git -C "$dir" rev-list --count "$before..$after")
-    record "$name" updated "$head  $before..$after ($count commits)"
+    record "$name" updated "origin/*"
     n_updated=$((n_updated + 1))
   fi
 done <<EOT
@@ -154,8 +122,8 @@ w_name=4
 w_state=6
 while IFS=$'\t' read -r name state detail; do
   [ -n "$name" ] || continue
-  if [ ${#name} -gt $w_name ]; then w_name=${#name}; fi
-  if [ ${#state} -gt $w_state ]; then w_state=${#state}; fi
+  if [ ${#name} -gt "$w_name" ]; then w_name=${#name}; fi
+  if [ ${#state} -gt "$w_state" ]; then w_state=${#state}; fi
 done <<EOT
 $rows
 EOT
