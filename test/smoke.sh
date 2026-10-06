@@ -268,6 +268,23 @@ stamped=$(ls -d "$WS"/scratch/archive/login-* 2>/dev/null | head -n 1)
 check "a second archive of the same feature is timestamped" \
   "$( [ -n "$stamped" ]; echo $? )" "archive: $(ls "$WS/scratch/archive" | tr '\n' ' ')"
 
+# Ignored plan links in the worktree must not vanish with it.
+wt worktree-create app feat/planned >/dev/null 2>&1
+wt_planned=$WS/worktrees/app/feat-planned
+mkdir -p "$wt_planned/.claude/plans/completed"
+printf '# done\n' > "$wt_planned/.claude/plans/completed/old.md"
+printf '# live\n' > "$TEST_ROOT/live-plan.md"
+ln -s "$TEST_ROOT/live-plan.md" "$wt_planned/.claude/plans/live.md"
+printf '.claude/plans/\n' >> "$(git -C "$wt_planned" rev-parse --git-path info/exclude)"
+git -C "$wt_planned" push -q -u origin feat/planned
+wt worktree-retire app feat/planned >/dev/null 2>&1
+rc=$?
+check "retiring with ignored .claude/plans/ succeeds" "$( [ "$rc" = 0 ]; echo $? )" "rc=$rc"
+check "retire rescues completed plans into the scratch archive" \
+  "$( [ -f "$WS/scratch/archive/planned/plans/completed/old.md" ]; echo $? )"
+check "retire keeps rescued plan links as symlinks" \
+  "$( [ -L "$WS/scratch/archive/planned/plans/live.md" ]; echo $? )"
+
 mkdir -p "$WS/repos/app/.workflow"
 printf '#!/usr/bin/env bash\nexit 4\n' > "$WS/repos/app/.workflow/pre-retire"
 chmod +x "$WS/repos/app/.workflow/pre-retire"

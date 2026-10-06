@@ -27,6 +27,7 @@ anything that must outlive the branch is written somewhere else.
 | `CONTEXT.md`, `docs/adr/`, `docs/agents/` | `repos/<repo>`, committed | every worktree, and the PR |
 | Tickets and specs | the configured issue tracker | every session |
 | Grilling notes, research, prototype notes | `scratch/active/<feature>/` | every worktree |
+| Plan-mode plan links and completed plans | `.scratch/<feature>/plans/` | every worktree |
 | Branch setup: database, dependencies | `repos/<repo>/.workflow/`, committed | every worktree, via `post-create` |
 | Code | the worktree, committed | the branch |
 
@@ -38,6 +39,15 @@ them. The worktree reaches nothing but itself.
 `.scratch`, and `scripts/worktree-retire` moves `scratch/active/<feature>`
 to `scratch/archive/<feature>`. That is what makes the `scratch/active/`
 row's promise survive the worktree that produced it.
+
+Plan links go to `.scratch/<feature>/plans/`, never the default
+`.claude/plans/` inside the worktree. This pins the destination for the
+plan-file rules. The state directories (`completed/`, `paused/`, ...) sit
+inside it unchanged. A worktree's `.claude/plans/` is git-ignored, so it
+does not count as dirty, and `git worktree remove` deletes it. As a safety
+net, `scripts/worktree-retire` copies any non-empty `.claude/plans/` to
+`scratch/active/<feature>/plans/` first, which is then archived with the
+rest.
 
 `/handoff` writes to the OS temp directory by default. Move the file into
 `scratch/active/<feature>/` when it should survive the session.

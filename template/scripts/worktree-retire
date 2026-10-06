@@ -216,6 +216,20 @@ if [ "$hooks" = 1 ] && [ -d "$wt_dir" ]; then
   fi
 fi
 
+# --- plan links --------------------------------------------------------------
+
+plans=$wt_dir/.claude/plans
+if [ -d "$plans" ] && [ ! -L "$plans" ] && [ -n "$(ls -A "$plans" 2>/dev/null)" ]; then
+  slug=$(ws_slug "$branch")
+  dst=$SCRATCH_DIR/active/$slug/plans
+  if [ -e "$dst" ]; then
+    dst=$dst-$(date +%Y%m%d%H%M%S)
+  fi
+  mkdir -p "$(dirname -- "$dst")"
+  cp -RP "$plans" "$dst"
+  log_warn "rescued .claude/plans/ to $(ws_rel "$dst")"
+fi
+
 # --- remove ------------------------------------------------------------------
 
 cd "$WORKSPACE_ROOT"

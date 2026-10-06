@@ -140,10 +140,13 @@ repo  branch  dirname  path  dirty  ahead  behind  upstream  pr  pr_state
     -y, --yes           assume yes to prompts
 
 With no arguments it retires the worktree you are standing in. It refuses a
-dirty tree or unpushed commits, runs `pre-retire`, removes the worktree,
+dirty tree or unpushed commits, runs `pre-retire`, copies a non-empty
+`.claude/plans/` to `scratch/active/<feature>/plans/`, removes the worktree,
 deletes the local branch, and moves `scratch/active/<feature>` to
 `scratch/archive/<feature>`. An existing archive is never merged into; a
-second one gets a timestamp.
+second one gets a timestamp. The plan copy exists because `.claude/plans/`
+is usually git-ignored, and `git worktree remove` deletes ignored files
+without counting them as dirty.
 
 `git branch -d` always refuses a squash-merged branch, because the squashed
 commit is a different object. When `gh` reports the pull request as merged,
