@@ -159,3 +159,46 @@ Files change frequently and may contradict the code.
 - archive/— done or abandoned; kept for the reasoning, not the answer
 
 Anything that stabilizes moves to docs/ or becomes an ADR.
+
+## Glossary
+
+- **Base branch** — the branch a new worktree starts from. Defaults to the
+  repository's default branch, pinned by `repo-add`; override with
+  `worktree-create --base`.
+- **Feature** — the scratch name of a branch: its slug. Notes for
+  `feat/login` live in `scratch/active/login/`, so `plan/login` and
+  `feat/login` share one folder.
+- **Frontier** — the tickets whose blockers are all done, so each can take
+  its own worktree in parallel. `scripts/worktree-list` is the view of it.
+- **Landed** — a branch whose work has reached the base branch: its pull
+  request is merged, it is merged into the base, or its remote branch is
+  gone. `worktree-prune` retires only landed branches.
+- **Lifecycle hook** — an executable script in `repos/<repo>/.workflow/`,
+  committed to the repository. `post-create` runs after a worktree is made;
+  `pre-retire` runs before it is removed and can abort the retirement.
+- **Main clone** — the one full clone of a repository, at `repos/<repo>`.
+  Every worktree of that repository hangs off it, and `sync-repos` keeps it
+  up to date.
+- **Plan link** — a symlink to an agent's plan-mode file, kept under
+  `.scratch/<feature>/plans/` so it outlives the worktree.
+- **Retire** — remove a worktree for good: run `pre-retire`, delete the
+  worktree and its local branch, and archive its scratch notes. Done by
+  `scripts/worktree-retire`.
+- **Scope** — the part of a branch name before the first slash, such as
+  `feat` in `feat/login`. Empty when the branch has no slash.
+- **Scratch area** — `scratch/` at the workspace root, for notes that must
+  outlive any single worktree. Each worktree reaches it through a
+  `.scratch` symlink to `scratch/active`.
+- **Slug** — the branch name with its scope stripped and any remaining
+  slashes turned into hyphens, such as `login` in `feat/login`.
+- **Ticket** — one unit of work in the issue tracker, sized to a single
+  fresh context window. One ticket gets one worktree.
+- **Workspace** — the directory created by the Quick Start command. It
+  holds the scripts, every main clone, every worktree, and the scratch
+  area.
+- **Worktree** — a git worktree: a second working directory for one branch,
+  at `worktrees/<repo>/<dirname>`. Disposable; anything that must survive
+  it is written elsewhere.
+- **Worktree directory name** — the branch name with every slash turned
+  into a hyphen, such as `feat-login`. Exposed to hooks as
+  `WORKFLOW_WORKTREE_NAME`.
