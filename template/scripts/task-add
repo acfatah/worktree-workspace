@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+_self=${BASH_SOURCE[0]}
+while [ -L "$_self" ]; do
+  _dir=$(cd -P "$(dirname -- "$_self")" && pwd)
+  _self=$(readlink -- "$_self")
+  case $_self in
+    /*) ;;
+    *)  _self=$_dir/$_self ;;
+  esac
+done
+SCRIPT_DIR=$(cd -P "$(dirname -- "$_self")" && pwd)
+
+# shellcheck source=./lib/workspace.sh
+. "$SCRIPT_DIR/lib/workspace.sh"
+
+USAGE='Usage: task-add [options] <task> <repo>...
+
+  -b, --base <ref>   base for repositories where the branch is new
+      --no-fetch     do not fetch before creating
+      --no-hooks     skip .workflow/post-create
+      --no-shared    do not copy shared/<repo>/ into new worktrees
+  -h, --help         show this help
+
+Adds worktrees to tasks/<task>/ on the branch its worktrees already use.
+<task> is the folder name, such as feat-login, or a path to it. Prints the
+task path on stdout.'
+
+opts=()
+task=
+repos=()
+
+add_positional() {
+  if [ -z "$task" ]; then
+    task=$1
+  else
+    repos+=("$1")
+  fi
+}
+
+while [ $# -gt 0 ]; do
+  case $1 in
+    -b|--base)    shift; [ $# -gt 0 ] || usage_die "--base needs a value"; opts+=(--base "$1") ;;
+    --base=*|--no-fetch|--no-hooks|--no-shared) opts+=("$1") ;;
+    -h|--help)    printf '%s\n' "$USAGE"; exit 0 ;;
+    --)           shift; break ;;
+    -*)           usage_die "unknown option: $1" ;;
+    *)            add_positional "$1" ;;
+  esac
+  shift
+done
+
+while [ $# -gt 0 ]; do
+  add_positional "$1"
+  shift
+done
+
+[ -n "$task" ] || usage_die "missing <task>"
+[ "${#repos[@]}" -gt 0 ] || usage_die "missing <repo>"
+
+ws_require_workspace
+
+task=${task%/}
+task=${task##*/}
+
+branch=$(ws_task_branch "$task")
+
+# A hand-renamed folder would send task-create somewhere else.
+if [ "$(ws_task_name "$branch")" != "$task" ]; then
+  die 4 "tasks/$task holds branch '$branch', which belongs in tasks/$(ws_task_name "$branch")"
+fi
+
+exec "$SCRIPT_DIR/task-create" ${opts[@]+"${opts[@]}"} -- "$branch" "${repos[@]}"

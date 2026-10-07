@@ -227,6 +227,164 @@ check "sync-repos prunes deleted remote branches" \
   "$( ! git -C "$APP" rev-parse --verify --quiet refs/remotes/origin/feat/extra >/dev/null; echo $? )"
 
 # ------------------------------------------------------------------------------
+# task-create / task-add
+# ------------------------------------------------------------------------------
+
+LEGACY=$WS/repos/legacy.git
+
+# upstream DIR - the upstream of DIR's checked-out branch, or nothing.
+upstream() { git -C "$1" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null; }
+branch_of() { git -C "$1" symbolic-ref --quiet --short HEAD 2>/dev/null; }
+
+# Fixtures: a pushed feature branch, and branches carrying post-create hooks.
+(
+  cd "$TEST_ROOT/seed-app"
+  git switch -qc feat/remote && git commit -q --allow-empty -m remote && git push -q origin feat/remote
+  git switch -qc feat/hooked main
+  mkdir -p .workflow
+  cat > .workflow/post-create <<'HOOK'
+#!/bin/sh
+printf '%s\n' "$WORKFLOW_TASK" "$WORKFLOW_TASK_DIR" "$WORKFLOW_REPO_DIR" "$PWD" > "$WORKFLOW_TASK_DIR/hook.out"
+HOOK
+  chmod +x .workflow/post-create
+  git add -A && git commit -qm hook && git push -q origin feat/hooked
+  git switch -qc feat/badhook main
+  mkdir -p .workflow
+  printf '#!/bin/sh\nexit 1\n' > .workflow/post-create
+  chmod +x .workflow/post-create
+  git add -A && git commit -qm badhook && git push -q origin feat/badhook
+  git switch -q main
+)
+
+out=$(wt task-create feat/login app 2>/dev/null)
+rc=$?
+T=$WS/tasks/feat-login
+check "task-create makes tasks/<task> and prints it" \
+  "$( [ "$rc" = 0 ] && [ "$out" = "$T" ]; echo $? )" "rc=$rc out=$out"
+
+check "task-create checks out the branch in tasks/<task>/<repo>" \
+  "$( [ "$(branch_of "$T/app")" = feat/login ]; echo $? )" "branch=$(branch_of "$T/app")"
+
+check "a new task branch has no upstream" "$( [ -z "$(upstream "$T/app")" ]; echo $? )" \
+  "upstream=$(upstream "$T/app")"
+
+check "task-create writes CLAUDE.md, NOTES.md and .claude/plans/" \
+  "$( [ -f "$T/CLAUDE.md" ] && [ -f "$T/NOTES.md" ] && [ -d "$T/.claude/plans" ] \
+      && grep -q 'feat/login' "$T/CLAUDE.md"; echo $? )"
+
+printf 'my notes\n' >> "$T/NOTES.md"
+cp "$T/CLAUDE.md" "$TEST_ROOT/claude.before"
+wt task-create feat/login app >/dev/null 2>&1
+rc=$?
+check "re-running task-create succeeds and keeps the task files" \
+  "$( [ "$rc" = 0 ] && cmp -s "$T/CLAUDE.md" "$TEST_ROOT/claude.before" \
+      && grep -q 'my notes' "$T/NOTES.md"; echo $? )" "rc=$rc"
+
+wt task-create feat/multi app legacy >/dev/null 2>&1
+M=$WS/tasks/feat-multi
+check "task-create bases each repo on its own default branch" \
+  "$( [ "$(git -C "$M/app" rev-parse HEAD)" = "$(git -C "$APP" rev-parse origin/main)" ] \
+      && [ "$(git -C "$M/legacy" rev-parse HEAD)" = "$(git -C "$LEGACY" rev-parse origin/master)" ]; echo $? )"
+
+wt task-create feat/x app nosuch >/dev/null 2>&1
+rc=$?
+check "task-create refuses an unknown repo with exit 3, creating nothing" \
+  "$( [ "$rc" = 3 ] && [ ! -e "$WS/tasks/feat-x" ]; echo $? )" "rc=$rc"
+
+wt task-create feat/remote app >/dev/null 2>&1
+check "task-create tracks an existing remote branch" \
+  "$( [ "$(upstream "$WS/tasks/feat-remote/app")" = origin/feat/remote ]; echo $? )" \
+  "upstream=$(upstream "$WS/tasks/feat-remote/app")"
+
+wt task-create --base feat/remote feat/based app >/dev/null 2>&1
+check "task-create --base starts a new branch at that ref" \
+  "$( [ "$(git -C "$WS/tasks/feat-based/app" rev-parse HEAD)" = "$(git -C "$APP" rev-parse origin/feat/remote)" ]; echo $? )"
+
+out=$(wt task-add feat-login legacy 2>/dev/null)
+rc=$?
+check "task-add adds a repo on the task's branch" \
+  "$( [ "$rc" = 0 ] && [ "$out" = "$T" ] && [ "$(branch_of "$T/legacy")" = feat/login ]; echo $? )" \
+  "rc=$rc out=$out branch=$(branch_of "$T/legacy")"
+
+wt task-add nosuch app >/dev/null 2>&1
+check "task-add refuses an unknown task with exit 3" "$( [ $? = 3 ]; echo $? )"
+
+# sync-repos above moved origin/main past the local main that repo-add made.
+wt task-create main app >/dev/null 2>&1
+rc=$?
+E=$WS/tasks/main/app
+check "task-create main makes an env task tracking origin/main" \
+  "$( [ "$rc" = 0 ] && [ "$(branch_of "$E")" = main ] && [ "$(upstream "$E")" = origin/main ]; echo $? )" \
+  "rc=$rc branch=$(branch_of "$E") upstream=$(upstream "$E")"
+
+check "an env task fast-forwards a stale local branch" \
+  "$( [ "$(git -C "$E" rev-parse HEAD)" = "$(git -C "$APP" rev-parse origin/main)" ]; echo $? )"
+
+( cd "$TEST_ROOT/seed-app" && git push -q origin main:dev )
+( cd "$TEST_ROOT/seed-legacy" && git push -q origin master:dev )
+printf 'ENV_BRANCHES="main dev"\n' > "$WS/workspace.conf"
+wt task-create dev app >/dev/null 2>&1
+wt task-add dev legacy >/dev/null 2>&1
+rc=$?
+check "task-add onto an env task tracks origin/<branch>" \
+  "$( [ "$rc" = 0 ] && [ "$(upstream "$WS/tasks/dev/legacy")" = origin/dev ]; echo $? )" \
+  "rc=$rc upstream=$(upstream "$WS/tasks/dev/legacy")"
+rm -f "$WS/workspace.conf"
+
+printf 'ENV_BRANCHES="staging"\n' > "$WS/workspace.conf"
+wt task-create staging app >/dev/null 2>&1
+rc=$?
+check "task-create refuses an env branch missing from origin with exit 3" \
+  "$( [ "$rc" = 3 ] && [ ! -e "$WS/tasks/staging" ]; echo $? )" "rc=$rc"
+rm -f "$WS/workspace.conf"
+
+mkdir -p "$WS/shared/app/config"
+printf 'SECRET=1\n' > "$WS/shared/app/.env"
+printf 'local: true\n' > "$WS/shared/app/config/local.yml"
+printf 'shadow\n' > "$WS/shared/app/README.md"
+wt task-create feat/shared app >/dev/null 2>"$TEST_ROOT/shared.err"
+S=$WS/tasks/feat-shared/app
+check "task-create copies shared/<repo>/ into the worktree" \
+  "$( [ "$(cat "$S/.env" 2>/dev/null)" = SECRET=1 ] && [ -f "$S/config/local.yml" ]; echo $? )"
+check "task-create never overwrites a file with a shared copy" \
+  "$( [ "$(cat "$S/README.md")" = app ]; echo $? )"
+check "task-create warns about a shared file the repo does not ignore" \
+  "$( grep -q 'config/local.yml is not ignored' "$TEST_ROOT/shared.err" \
+      && ! grep -q '\.env is not ignored' "$TEST_ROOT/shared.err"; echo $? )" "$(cat "$TEST_ROOT/shared.err")"
+wt task-create --no-shared feat/noshared app >/dev/null 2>&1
+check "task-create --no-shared skips the copy" \
+  "$( [ ! -e "$WS/tasks/feat-noshared/app/.env" ]; echo $? )"
+rm -rf "$WS/shared/app"
+
+wt task-create feat/hooked app >/dev/null 2>&1
+H=$WS/tasks/feat-hooked
+want=$(printf '%s\n' feat-hooked "$H" "$APP" "$H/app")
+got=$(cat "$H/hook.out" 2>/dev/null)
+check "post-create runs in the worktree with the task environment" \
+  "$( [ "$got" = "$want" ]; echo $? )" "want=$want" "got=$got"
+
+rm -f "$H/hook.out"
+wt task-add --no-hooks feat-hooked legacy >/dev/null 2>&1
+check "--no-hooks skips post-create" "$( [ ! -e "$H/hook.out" ]; echo $? )"
+
+wt task-create feat/badhook app >/dev/null 2>&1
+rc=$?
+check "a failing post-create exits 5 and keeps the worktree" \
+  "$( [ "$rc" = 5 ] && [ -e "$WS/tasks/feat-badhook/app/.git" ]; echo $? )" "rc=$rc"
+
+wt task-create feat/a-b app >/dev/null 2>&1
+wt task-create feat-a/b app >/dev/null 2>&1
+check "two branches with one task folder exit 4" "$( [ $? = 4 ]; echo $? )"
+
+mkdir -p "$WS/tasks/feat-occ/app"
+touch "$WS/tasks/feat-occ/app/stray"
+wt task-create feat/occ app >/dev/null 2>&1
+check "a non-empty unregistered target exits 4" "$( [ $? = 4 ]; echo $? )"
+rm -f "$WS/tasks/feat-occ/app/stray"
+wt task-create feat/occ app >/dev/null 2>&1
+check "an empty target directory is reused" "$( [ $? = 0 ]; echo $? )"
+
+# ------------------------------------------------------------------------------
 # Lint
 # ------------------------------------------------------------------------------
 

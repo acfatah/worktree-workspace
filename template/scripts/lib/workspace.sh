@@ -398,3 +398,211 @@ ws_run_hook() {
   log_step "running $(ws_rel "$hook")"
   ( cd "$WORKFLOW_WORKTREE" && exec "$hook" )
 }
+
+# ------------------------------------------------------------------------------
+# Tasks
+# ------------------------------------------------------------------------------
+
+# ws_task_branch TASK - the branch every worktree in tasks/TASK has checked out.
+# The folder name cannot be turned back into a branch: feat-login may be
+# feat/login or feat-login.
+ws_task_branch() {
+  local task=$1 dir d b found=
+  dir=$(ws_task_dir "$task")
+  if [ ! -d "$dir" ]; then
+    die 3 "no such task: tasks/$task"
+  fi
+  for d in "$dir"/*/; do
+    [ -e "${d}.git" ] || continue
+    b=$(git -C "$d" symbolic-ref --quiet --short HEAD 2>/dev/null) || continue
+    if [ -z "$found" ]; then
+      found=$b
+    elif [ "$b" != "$found" ]; then
+      die 4 "tasks/$task mixes branches: $found and $b"
+    fi
+  done
+  if [ -z "$found" ]; then
+    die 3 "tasks/$task has no worktrees to read its branch from" \
+          "name the branch instead: scripts/task-create <branch> <repo>..."
+  fi
+  printf '%s\n' "$found"
+}
+
+# ws_write_task_files TASK BRANCH - the task folder, its CLAUDE.md, NOTES.md and
+# .claude/plans/. Existing files are left alone, so a re-run never clobbers
+# notes. CLAUDE.md lists no repositories, so task-add cannot make it stale.
+ws_write_task_files() {
+  local task=$1 branch=$2 dir
+  dir=$(ws_task_dir "$task")
+  mkdir -p "$dir/.claude/plans"
+
+  if [ ! -e "$dir/CLAUDE.md" ]; then
+    cat > "$dir/CLAUDE.md" <<EOT
+# Task: $task
+
+Branch \`$branch\` in every repository below. Each subfolder is a git
+worktree of \`repos/<name>.git\`; open one PR per repository, all from this
+branch.
+
+- Notes: \`NOTES.md\`
+- Plans: \`.claude/plans/\` (links)
+- Cross-task notes: \`../../docs/\`
+
+Workspace rules: \`../../CLAUDE.md\`.
+EOT
+    log_info "wrote    $(ws_rel "$dir/CLAUDE.md")"
+  fi
+
+  if [ ! -e "$dir/NOTES.md" ]; then
+    cat > "$dir/NOTES.md" <<EOT
+# $task
+
+Branch: \`$branch\`
+EOT
+    log_info "wrote    $(ws_rel "$dir/NOTES.md")"
+  fi
+}
+
+# ws_wt_preflight TASK REPO BRANCH BASE - check one worktree before anything is
+# created, so a multi-repo task fails up front instead of half-made. Prints
+# "exists" or "create"; dies otherwise. BASE may be empty when the branch
+# already exists.
+ws_wt_preflight() {
+  local task=$1 repo=$2 branch=$3 base=$4 dir wt p b f checked_out
+
+  dir=$(ws_repo_dir "$repo")
+  wt=$(ws_wt_path "$task" "$repo")
+
+  # A stale record left by a hand-deleted directory is the most common
+  # confusing failure here, and clearing it costs nothing.
+  git -C "$dir" worktree prune
+
+  while IFS=$'\t' read -r p b f; do
+    [ -n "$p" ] || continue
+    if [ "$p" = "$wt" ] ||
+       { [ -d "$p" ] && [ -d "$wt" ] && [ "$(ws_realpath "$p")" = "$(ws_realpath "$wt")" ]; }; then
+      if [ "$b" = "$branch" ]; then
+        printf 'exists\n'
+        return 0
+      fi
+      die 4 "$(ws_rel "$wt") is already the worktree for '${b:-a detached HEAD}'" \
+            "two branch names can sanitize to one task folder; rename one of them"
+    fi
+  done <<EOT
+$(ws_worktree_records "$dir")
+EOT
+
+  if [ -e "$wt" ]; then
+    # rmdir refuses a non-empty directory, which is exactly the guard we want.
+    # These scripts never run rm -rf.
+    rmdir "$wt" 2>/dev/null ||
+      die 4 "$(ws_rel "$wt") already exists and is not a worktree of $repo" \
+            "move it out of the way, then re-run"
+  fi
+
+  checked_out=$(ws_branch_worktree "$dir" "$branch") || checked_out=
+  if [ -n "$checked_out" ]; then
+    die 4 "branch '$branch' of $repo is already checked out at $(ws_rel "$checked_out")"
+  fi
+
+  if git -C "$dir" show-ref --verify --quiet "refs/heads/$branch" ||
+     git -C "$dir" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+    printf 'create\n'
+    return 0
+  fi
+
+  if ws_is_env_branch "$branch" "$dir"; then
+    die 3 "env branch '$branch' does not exist in $repo, locally or on origin" \
+          "env tasks check out existing branches; they never create one"
+  fi
+
+  if [ -z "$base" ]; then
+    die 3 "cannot determine a base branch for '$repo'" \
+          "pass --base <ref>, or set one:" \
+          "  git -C repos/$repo.git config workflow.baseBranch main"
+  fi
+  if ! git -C "$dir" rev-parse --verify --quiet "$(ws_base_ref "$dir" "$base")^{commit}" >/dev/null; then
+    die 3 "base '$base' does not exist in $repo"
+  fi
+  printf 'create\n'
+}
+
+# ws_wt_create TASK REPO BRANCH BASE - add tasks/TASK/REPO on BRANCH. Assumes
+# ws_wt_preflight said "create".
+ws_wt_create() {
+  local task=$1 repo=$2 branch=$3 base=$4 dir wt base_ref old new
+  local local_exists=0 remote_exists=0
+
+  dir=$(ws_repo_dir "$repo")
+  wt=$(ws_wt_path "$task" "$repo")
+
+  if git -C "$dir" show-ref --verify --quiet "refs/heads/$branch"; then
+    local_exists=1
+  fi
+  if git -C "$dir" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+    remote_exists=1
+  fi
+
+  mkdir -p "$(dirname -- "$wt")"
+
+  if [ "$local_exists" = 1 ]; then
+    if [ "$remote_exists" = 1 ]; then
+      # Fetches move origin/* but never refs/heads/*, so a local branch that
+      # is merely behind would start the worktree stale. The old value makes
+      # update-ref refuse if the branch moved meanwhile.
+      old=$(git -C "$dir" rev-parse "refs/heads/$branch")
+      new=$(git -C "$dir" rev-parse "refs/remotes/origin/$branch")
+      if [ "$old" != "$new" ] && git -C "$dir" merge-base --is-ancestor "$old" "$new"; then
+        git -C "$dir" update-ref "refs/heads/$branch" "$new" "$old"
+        log_info "ff       $branch to origin/$branch"
+      fi
+      if ws_is_env_branch "$branch" "$dir" &&
+         [ -z "$(git -C "$dir" for-each-ref --format='%(upstream)' "refs/heads/$branch")" ]; then
+        git -C "$dir" branch -q --set-upstream-to="origin/$branch" "$branch"
+      fi
+    fi
+    log_info "start    existing local branch $branch"
+    git -C "$dir" worktree add "$wt" "$branch" >/dev/null
+  elif [ "$remote_exists" = 1 ]; then
+    log_info "start    origin/$branch"
+    git -C "$dir" worktree add --track -b "$branch" "$wt" "origin/$branch" >/dev/null
+  else
+    base_ref=$(ws_base_ref "$dir" "$base")
+    log_info "base     $base_ref"
+    # --no-track: branching from origin/<base> would otherwise make <base> the
+    # upstream, which breaks `git push` defaults and makes a new branch look
+    # merged. The upstream arrives with the first `git push -u origin <branch>`.
+    git -C "$dir" worktree add --no-track -b "$branch" "$wt" "$base_ref" >/dev/null
+  fi
+
+  log_info "path     $(ws_rel "$wt")"
+}
+
+# ws_copy_shared REPO WORKTREE - copy shared/REPO/ into the worktree, keeping
+# relative paths and never overwriting. Warn about a copied path the worktree
+# does not ignore: it would make the worktree dirty and block a retire.
+ws_copy_shared() {
+  local repo=$1 wt=$2 src f rel
+  src=$SHARED_DIR/$repo
+  if [ ! -d "$src" ]; then
+    return 0
+  fi
+  while IFS= read -r -d '' f; do
+    rel=${f#"$src"/}
+    if [ -e "$wt/$rel" ] || [ -L "$wt/$rel" ]; then
+      log_detail "skip $rel (already present)"
+      continue
+    fi
+    mkdir -p "$wt/$(dirname -- "$rel")"
+    if [ -L "$f" ]; then
+      ln -s "$(readlink -- "$f")" "$wt/$rel"
+    else
+      cp -p "$f" "$wt/$rel"
+    fi
+    log_info "copied   shared/$repo/$rel"
+    if ! git -C "$wt" check-ignore -q -- "$rel" 2>/dev/null; then
+      log_warn "$rel is not ignored in $repo; the worktree will show it as untracked"
+      log_detail "ignore it in $repo, or remove shared/$repo/$rel"
+    fi
+  done < <(find "$src" \( -type f -o -type l \) -print0)
+}
