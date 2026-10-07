@@ -1,0 +1,318 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+_self=${BASH_SOURCE[0]}
+while [ -L "$_self" ]; do
+  _dir=$(cd -P "$(dirname -- "$_self")" && pwd)
+  _self=$(readlink -- "$_self")
+  case $_self in
+    /*) ;;
+    *)  _self=$_dir/$_self ;;
+  esac
+done
+SCRIPT_DIR=$(cd -P "$(dirname -- "$_self")" && pwd)
+
+# shellcheck source=./lib/workspace.sh
+. "$SCRIPT_DIR/lib/workspace.sh"
+
+USAGE='Usage: task-list [options] [<task>...]
+
+      --pr / --no-pr   pull request column (default: on when gh is usable)
+      --fetch          fetch each repository first
+      --porcelain      tab separated, uncoloured, no header
+  -h, --help           show this help
+
+Lists tasks/<task>/ grouped by task, one row per repository. A task has
+landed when every repository has: its pull request merged, its branch merged
+into the default branch, or its remote branch deleted. Env tasks are marked
+and never counted as landed.
+
+Touches the network only with --fetch or the pull request column.
+
+--porcelain fields, one line per worktree, in order and stable:
+  task  repo  branch  path  state  ahead  behind  upstream  pr  pr_state
+  landed  env'
+
+want_pr=auto
+do_fetch=0
+porcelain=0
+tasks=
+
+while [ $# -gt 0 ]; do
+  case $1 in
+    --pr)        want_pr=1 ;;
+    --no-pr)     want_pr=0 ;;
+    --fetch)     do_fetch=1 ;;
+    --porcelain) porcelain=1 ;;
+    -h|--help)   printf '%s\n' "$USAGE"; exit 0 ;;
+    --)          shift; break ;;
+    -*)          usage_die "unknown option: $1" ;;
+    *)           tasks=$tasks$1$'\n' ;;
+  esac
+  shift
+done
+
+while [ $# -gt 0 ]; do
+  tasks=$tasks$1$'\n'
+  shift
+done
+
+ws_require_workspace
+
+if [ "$porcelain" = 1 ]; then
+  want_pr=${want_pr/auto/0}
+fi
+
+if [ -n "$tasks" ]; then
+  while IFS= read -r task; do
+    [ -n "$task" ] || continue
+    if [ ! -d "$(ws_task_dir "$task")" ]; then
+      die 3 "no such task: tasks/$task"
+    fi
+  done <<EOT
+$tasks
+EOT
+else
+  tasks=$(ws_list_tasks)
+fi
+
+if [ -z "$tasks" ]; then
+  log_info "no tasks; start one with: scripts/task-create <branch> <repo>..."
+  exit 0
+fi
+
+pr_available=0
+if [ "$want_pr" != 0 ]; then
+  if ws_gh_ok; then
+    pr_available=1
+  elif [ "$want_pr" = 1 ]; then
+    log_warn "gh is unavailable or not authenticated; pull request column omitted"
+  fi
+fi
+
+# Per-repository caches, filled on first use: a repository shared by many
+# tasks is fetched and asked for pull requests once.
+declare -A branch_cache=()
+declare -A pr_cache=()
+
+repo_tables() {
+  local repo=$1 dir=$REPOS_DIR/$1.git
+  if [ -n "${branch_cache[$repo]+set}" ]; then
+    return 0
+  fi
+  if [ "$do_fetch" = 1 ]; then
+    git -C "$dir" fetch --prune --quiet origin 2>/dev/null || \
+      log_warn "$repo: fetch failed"
+  fi
+  branch_cache[$repo]=$(ws_branch_table "$dir")
+  pr_cache[$repo]=
+  if [ "$pr_available" = 1 ]; then
+    pr_cache[$repo]=$(ws_pr_table "$dir")
+  fi
+}
+
+# Rows: task, repo, branch, path, state, ahead, behind, upstream, pr,
+# pr_state, landed, env, evidence. A task without worktrees gets one row with
+# an empty repo.
+rows=
+
+while IFS= read -r task; do
+  [ -n "$task" ] || continue
+  records=$(ws_task_worktrees "$task")
+  if [ -z "$records" ]; then
+    rows=$rows$task$'\t\t\t\t\t\t\t\t\t\t\t\t\n'
+    continue
+  fi
+
+  while IFS=$'\t' read -r repo p b f; do
+    [ -n "$repo" ] || continue
+    dir=$REPOS_DIR/$repo.git
+    repo_tables "$repo"
+
+    branch=${b:-'(detached)'}
+    upstream=
+    track=
+    if [ -n "$b" ]; then
+      line=$(printf '%s\n' "${branch_cache[$repo]}" | awk -F'\t' -v n="$b" '$1 == n { print; exit }')
+      upstream=$(printf '%s' "$line" | cut -f2)
+      track=$(printf '%s' "$line" | cut -f3)
+    fi
+
+    ahead=0
+    behind=0
+    case $track in
+      *gone*)
+        ahead=-
+        behind=-
+        upstream=gone
+        ;;
+      *)
+        a=$(printf '%s' "$track" | sed -n 's/.*ahead \([0-9][0-9]*\).*/\1/p')
+        bh=$(printf '%s' "$track" | sed -n 's/.*behind \([0-9][0-9]*\).*/\1/p')
+        if [ -n "$a" ]; then ahead=$a; fi
+        if [ -n "$bh" ]; then behind=$bh; fi
+        ;;
+    esac
+    if [ -z "$upstream" ]; then
+      upstream='(none)'
+    fi
+
+    state=clean
+    case $f in
+      *locked*) state=locked ;;
+    esac
+    if [ ! -d "$p" ]; then
+      state=missing
+    elif [ "$state" = clean ] && ws_is_dirty "$p"; then
+      state=dirty
+    fi
+
+    pr_num='-'
+    pr_state='-'
+    if [ -n "${pr_cache[$repo]}" ] && [ -n "$b" ]; then
+      pr_line=$(printf '%s\n' "${pr_cache[$repo]}" | awk -F'\t' -v n="$b" '$1 == n { print; exit }')
+      if [ -n "$pr_line" ]; then
+        pr_num=$(printf '%s' "$pr_line" | cut -f2)
+        pr_state=$(printf '%s' "$pr_line" | cut -f3)
+      fi
+    fi
+
+    env=0
+    landed=-
+    evidence=
+    if [ -n "$b" ]; then
+      if ws_is_env_branch "$b" "$dir"; then
+        env=1
+      else
+        verdict=$(ws_landed "$dir" "$b" "${pr_state#-}")
+        landed=${verdict%%$'\t'*}
+        evidence=${verdict#*$'\t'}
+      fi
+    fi
+
+    rows=$rows$task$'\t'$repo$'\t'$branch$'\t'$p$'\t'$state$'\t'$ahead$'\t'$behind$'\t'$upstream$'\t'$pr_num$'\t'$pr_state$'\t'$landed$'\t'$env$'\t'$evidence$'\n'
+  done <<EOT
+$records
+EOT
+done <<EOT
+$tasks
+EOT
+
+if [ "$porcelain" = 1 ]; then
+  while IFS=$'\t' read -r task repo branch path state ahead behind upstream pr pr_state landed env evidence; do
+    [ -n "$task" ] || continue
+    [ -n "$repo" ] || continue
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$task" "$repo" "$branch" "$path" "$state" "$ahead" "$behind" \
+      "$upstream" "$pr" "$pr_state" "$landed" "$env"
+  done <<EOT
+$rows
+EOT
+  exit 0
+fi
+
+# ab_cell AHEAD BEHIND - "+1/-0", or "-" when the upstream is gone.
+ab_cell() {
+  if [ "$1" = - ]; then printf -- '-\n'; else printf '+%s/-%s\n' "$1" "$2"; fi
+}
+
+# pr_text NUMBER STATE - "#12 OPEN", or "-" without a pull request.
+pr_text() {
+  if [ "$2" = - ]; then printf -- '-\n'; else printf '%s %s\n' "$1" "$2"; fi
+}
+
+w_repo=4
+w_state=5
+w_ab=5
+w_up=8
+w_pr=2
+while IFS=$'\t' read -r task repo branch path state ahead behind upstream pr pr_state landed env evidence; do
+  [ -n "$repo" ] || continue
+  ab=$(ab_cell "$ahead" "$behind")
+  prc=$(pr_text "$pr" "$pr_state")
+  if [ ${#repo} -gt "$w_repo" ]; then w_repo=${#repo}; fi
+  if [ ${#state} -gt "$w_state" ]; then w_state=${#state}; fi
+  if [ ${#ab} -gt "$w_ab" ]; then w_ab=${#ab}; fi
+  if [ ${#upstream} -gt "$w_up" ]; then w_up=${#upstream}; fi
+  if [ ${#prc} -gt "$w_pr" ]; then w_pr=${#prc}; fi
+done <<EOT
+$rows
+EOT
+
+# task_header TASK - "task  branch  [env]  landed n/m", from the rows.
+task_header() {
+  local want=$1 task repo branch path state ahead behind upstream pr pr_state landed env evidence
+  local first_branch='' is_env=0 total=0 done_n=0 summary=''
+  while IFS=$'\t' read -r task repo branch path state ahead behind upstream pr pr_state landed env evidence; do
+    [ "$task" = "$want" ] || continue
+    [ -n "$repo" ] || continue
+    if [ -z "$first_branch" ]; then first_branch=$branch; fi
+    if [ "$env" = 1 ]; then is_env=1; fi
+    total=$((total + 1))
+    case $landed in
+      merged|gone) done_n=$((done_n + 1)) ;;
+    esac
+  done <<EOT
+$rows
+EOT
+
+  if [ "$total" = 0 ]; then
+    printf '%s  %s\n' "$(PC_bold "$want")" "$(PC_dim '(no worktrees)')"
+    return 0
+  fi
+  if [ "$is_env" = 1 ]; then
+    summary=$(PC_cyan env)
+  elif [ "$done_n" = "$total" ]; then
+    summary=$(PC_green landed)
+  elif [ "$done_n" -gt 0 ]; then
+    summary=$(PC_yellow "landed $done_n/$total")
+  fi
+  printf '%s  %s%s\n' "$(PC_bold "$want")" "$(PC_dim "$first_branch")" "${summary:+  $summary}"
+}
+
+while IFS= read -r task; do
+  [ -n "$task" ] || continue
+  task_header "$task"
+
+  while IFS=$'\t' read -r t repo branch path state ahead behind upstream pr pr_state landed env evidence; do
+    [ "$t" = "$task" ] || continue
+    [ -n "$repo" ] || continue
+    ab=$(ab_cell "$ahead" "$behind")
+
+    # Pad first, colour second: the escapes must not enter the width maths.
+    painted_state=$(printf '%-*s' "$w_state" "$state")
+    case $state in
+      dirty)          painted_state=$(PC_yellow "$painted_state") ;;
+      locked|missing) painted_state=$(PC_red "$painted_state") ;;
+      *)              painted_state=$(PC_dim "$painted_state") ;;
+    esac
+
+    painted_up=$(printf '%-*s' "$w_up" "$upstream")
+    case $upstream in
+      gone)     painted_up=$(PC_red "$painted_up") ;;
+      '(none)') painted_up=$(PC_dim "$painted_up") ;;
+    esac
+
+    prc=$(printf '%-*s' "$w_pr" "$(pr_text "$pr" "$pr_state")")
+    case $pr_state in
+      MERGED) prc=$(PC_green "$prc") ;;
+      OPEN)   prc=$(PC_cyan "$prc") ;;
+      CLOSED) prc=$(PC_red "$prc") ;;
+      *)      prc=$(PC_dim "$prc") ;;
+    esac
+
+    case $landed in
+      merged|gone) land_cell=$(PC_green "$landed ($evidence)") ;;
+      new)         land_cell=$(PC_dim "$landed") ;;
+      -)           land_cell= ;;
+      *)           land_cell=$(PC_dim "$landed") ;;
+    esac
+
+    printf '  %-*s  %s  %-*s  %s  %s  %s\n' \
+      "$w_repo" "$repo" "$painted_state" "$w_ab" "$ab" "$painted_up" "$prc" "$land_cell"
+  done <<EOT
+$rows
+EOT
+done <<EOT
+$tasks
+EOT

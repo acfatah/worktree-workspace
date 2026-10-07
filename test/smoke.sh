@@ -385,6 +385,184 @@ wt task-create feat/occ app >/dev/null 2>&1
 check "an empty target directory is reused" "$( [ $? = 0 ]; echo $? )"
 
 # ------------------------------------------------------------------------------
+# ws_landed / task-list
+# ------------------------------------------------------------------------------
+
+# landed REPO_DIR BRANCH - just the verdict.
+landed() { lib ws_landed "$1" "$2" | cut -f1; }
+
+# row TASK REPO FIELD - one --porcelain field (1-based) for TASK/REPO.
+row() { wt task-list --porcelain "$1" 2>/dev/null | awk -F'\t' -v r="$2" -v f="$3" '$2 == r { print $f }'; }
+
+wt task-create feat/land app legacy >/dev/null 2>&1
+L=$WS/tasks/feat-land
+check "ws_landed says new for a branch with no commits" \
+  "$( [ "$(landed "$APP" feat/land)" = new ]; echo $? )" "verdict=$(landed "$APP" feat/land)"
+
+( cd "$L/app" && git commit -q --allow-empty -m land-app && git push -q -u origin feat/land )
+( cd "$L/legacy" && git commit -q --allow-empty -m land-legacy && git push -q -u origin feat/land )
+check "ws_landed says open for a pushed, unmerged branch" \
+  "$( [ "$(landed "$APP" feat/land)" = open ]; echo $? )" "verdict=$(landed "$APP" feat/land)"
+
+( cd "$TEST_ROOT/seed-app" && git fetch -q origin feat/land && git merge -q --ff-only FETCH_HEAD \
+    && git push -q origin main )
+git -C "$APP" fetch -q origin
+check "ws_landed says merged once the branch is in origin/<default>" \
+  "$( [ "$(landed "$APP" feat/land)" = merged ]; echo $? )" "verdict=$(landed "$APP" feat/land)"
+
+check "ws_landed still says new for a fresh branch once the base moves on" \
+  "$( [ "$(landed "$APP" feat/login)" = new ]; echo $? )" "verdict=$(landed "$APP" feat/login)"
+
+wt task-create feat/gone app >/dev/null 2>&1
+( cd "$WS/tasks/feat-gone/app" && git commit -q --allow-empty -m gone && git push -q -u origin feat/gone )
+git -C "$TEST_ROOT/seed-app" push -q origin --delete feat/gone
+git -C "$APP" fetch -q --prune origin
+check "ws_landed says gone once the remote branch is deleted" \
+  "$( [ "$(landed "$APP" feat/gone)" = gone ]; echo $? )" "verdict=$(landed "$APP" feat/gone)"
+
+porc=$(wt task-list --porcelain feat-land 2>/dev/null)
+check "task-list --porcelain prints one row per repo of a task" \
+  "$( [ "$(printf '%s\n' "$porc" | wc -l | tr -d ' ')" = 2 ] \
+      && [ "$(printf '%s\n' "$porc" | cut -f1,2,3 | tr '\t\n' ' ')" = 'feat-land app feat/land feat-land legacy feat/land ' ]; echo $? )" \
+  "$porc"
+
+check "task-list --porcelain reports each repo's landing" \
+  "$( [ "$(row feat-land app 11)" = merged ] && [ "$(row feat-land legacy 11)" = open ]; echo $? )" \
+  "app=$(row feat-land app 11) legacy=$(row feat-land legacy 11)"
+
+out=$(wt task-list feat-land 2>/dev/null)
+check "task-list shows a partial landing" \
+  "$( printf '%s\n' "$out" | head -n 1 | grep -q 'landed 1/2'; echo $? )" "$out"
+
+touch "$L/app/stray"
+check "task-list shows a dirty worktree" \
+  "$( [ "$(row feat-land app 5)" = dirty ]; echo $? )" "state=$(row feat-land app 5)"
+rm -f "$L/app/stray"
+
+check "task-list marks an env task" \
+  "$( [ "$(row main app 12)" = 1 ] && [ "$(row feat-land app 12)" = 0 ]; echo $? )" \
+  "main=$(row main app 12)"
+
+out=$(wt task-list 2>/dev/null)
+check "task-list lists every task" \
+  "$( printf '%s\n' "$out" | grep -q '^feat-land ' && printf '%s\n' "$out" | grep -q '^main '; echo $? )" "$out"
+
+wt task-list nosuch >/dev/null 2>&1
+check "task-list refuses an unknown task with exit 3" "$( [ $? = 3 ]; echo $? )"
+
+# ------------------------------------------------------------------------------
+# task-retire
+# ------------------------------------------------------------------------------
+
+touch "$L/app/stray"
+wt task-retire feat-land >/dev/null 2>&1
+rc=$?
+check "task-retire refuses a dirty worktree with exit 4, changing nothing" \
+  "$( [ "$rc" = 4 ] && [ -e "$L/app/.git" ] && [ -e "$L/legacy/.git" ] \
+      && git -C "$APP" show-ref --verify --quiet refs/heads/feat/land; echo $? )" "rc=$rc"
+rm -f "$L/app/stray"
+
+git -C "$L/legacy" commit -q --allow-empty -m unpushed
+wt task-retire feat-land >/dev/null 2>&1
+rc=$?
+check "task-retire refuses unpushed commits with exit 4" \
+  "$( [ "$rc" = 4 ] && [ -e "$L/legacy/.git" ]; echo $? )" "rc=$rc"
+git -C "$L/legacy" reset -q --hard HEAD~1
+
+wt task-retire main >/dev/null 2>&1
+rc=$?
+check "task-retire refuses an env task with exit 4" \
+  "$( [ "$rc" = 4 ] && [ -e "$WS/tasks/main/app/.git" ]; echo $? )" "rc=$rc"
+
+# Plan links: one at task level, one dangling, one inside a worktree (ignored
+# there through the bare repository's shared info/exclude).
+mkdir -p "$HOME/.claude/plans" "$L/app/.claude/plans"
+printf 'task plan\n' > "$HOME/.claude/plans/task.md"
+printf 'worktree plan\n' > "$HOME/.claude/plans/wt.md"
+ln -s "$HOME/.claude/plans/task.md" "$L/.claude/plans/task.md"
+ln -s "$HOME/.claude/plans/nope.md" "$L/.claude/plans/dangling.md"
+ln -s "$HOME/.claude/plans/wt.md" "$L/app/.claude/plans/wt.md"
+printf '.claude/plans/\n' >> "$APP/info/exclude"
+
+out=$(wt task-retire feat-land 2>"$TEST_ROOT/retire.err")
+rc=$?
+A=$WS/archive/feat-land
+check "task-retire archives the task and prints the archive path" \
+  "$( [ "$rc" = 0 ] && [ "$out" = "$A" ] && [ ! -e "$L" ] && [ -f "$A/NOTES.md" ]; echo $? )" \
+  "rc=$rc out=$out" "$(cat "$TEST_ROOT/retire.err")"
+
+check "task-retire removes every worktree" \
+  "$( [ -z "$(lib ws_task_worktrees feat-land)" ]; echo $? )" "$(lib ws_task_worktrees feat-land)"
+
+check "task-retire deletes the task's local branches and keeps the default" \
+  "$( ! git -C "$APP" show-ref --verify --quiet refs/heads/feat/land \
+      && ! git -C "$LEGACY" show-ref --verify --quiet refs/heads/feat/land \
+      && git -C "$APP" show-ref --verify --quiet refs/heads/main; echo $? )"
+
+check "task-retire replaces a plan link with a real copy" \
+  "$( [ ! -L "$A/.claude/plans/task.md" ] && [ "$(cat "$A/.claude/plans/task.md")" = 'task plan' ]; echo $? )"
+
+check "task-retire keeps a dangling plan link" "$( [ -L "$A/.claude/plans/dangling.md" ]; echo $? )"
+
+check "task-retire rescues a worktree's own plans as real copies" \
+  "$( [ ! -L "$A/.claude/plans/app/wt.md" ] \
+      && [ "$(cat "$A/.claude/plans/app/wt.md" 2>/dev/null)" = 'worktree plan' ]; echo $? )"
+
+wt task-create feat/land app >/dev/null 2>&1
+out=$(wt task-retire feat-land 2>/dev/null)
+rc=$?
+check "a second retire of the same name appends the date" \
+  "$( [ "$rc" = 0 ] && [ "$out" = "$A-$(date +%Y-%m-%d)" ] && [ -d "$out" ]; echo $? )" "rc=$rc out=$out"
+
+(
+  cd "$TEST_ROOT/seed-app"
+  git switch -qc feat/retirehook main
+  mkdir -p .workflow
+  cat > .workflow/pre-retire <<HOOK
+#!/bin/sh
+printf '%s\n' "\$WORKFLOW_EVENT" "\$WORKFLOW_TASK" "\$PWD" > "$TEST_ROOT/retire-hook.out"
+if [ -e "$TEST_ROOT/hookfail" ]; then exit 1; fi
+HOOK
+  chmod +x .workflow/pre-retire
+  git add -A && git commit -qm retirehook && git push -q origin feat/retirehook
+  git switch -q main
+)
+wt task-create feat/retirehook app >/dev/null 2>&1
+R=$WS/tasks/feat-retirehook
+touch "$TEST_ROOT/hookfail"
+wt task-retire feat-retirehook >/dev/null 2>&1
+rc=$?
+check "a failing pre-retire exits 5 and removes nothing" \
+  "$( [ "$rc" = 5 ] && [ -e "$R/app/.git" ]; echo $? )" "rc=$rc"
+
+want=$(printf '%s\n' pre-retire feat-retirehook "$R/app")
+got=$(cat "$TEST_ROOT/retire-hook.out" 2>/dev/null)
+check "pre-retire runs in the worktree with the task environment" \
+  "$( [ "$got" = "$want" ]; echo $? )" "want=$want" "got=$got"
+
+rm -f "$TEST_ROOT/retire-hook.out"
+wt task-retire --no-hooks feat-retirehook >/dev/null 2>&1
+rc=$?
+check "task-retire --no-hooks skips pre-retire" \
+  "$( [ "$rc" = 0 ] && [ ! -e "$TEST_ROOT/retire-hook.out" ] && [ ! -e "$R" ]; echo $? )" "rc=$rc"
+rm -f "$TEST_ROOT/hookfail"
+
+wt task-create feat/infer app >/dev/null 2>&1
+( cd "$WS/tasks/feat-infer/app" && "$WS/scripts/task-retire" >/dev/null 2>&1 )
+rc=$?
+check "task-retire with no argument retires the task holding the cwd" \
+  "$( [ "$rc" = 0 ] && [ -d "$WS/archive/feat-infer" ] && [ ! -e "$WS/tasks/feat-infer" ]; echo $? )" "rc=$rc"
+
+wt task-retire nosuch >/dev/null 2>&1
+check "task-retire refuses an unknown task with exit 3" "$( [ $? = 3 ]; echo $? )"
+
+wt task-retire --force main >/dev/null 2>&1
+rc=$?
+check "task-retire --force retires an env task and keeps its branch" \
+  "$( [ "$rc" = 0 ] && [ ! -e "$WS/tasks/main" ] \
+      && git -C "$APP" show-ref --verify --quiet refs/heads/main; echo $? )" "rc=$rc"
+
+# ------------------------------------------------------------------------------
 # Lint
 # ------------------------------------------------------------------------------
 

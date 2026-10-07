@@ -1,0 +1,295 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+_self=${BASH_SOURCE[0]}
+while [ -L "$_self" ]; do
+  _dir=$(cd -P "$(dirname -- "$_self")" && pwd)
+  _self=$(readlink -- "$_self")
+  case $_self in
+    /*) ;;
+    *)  _self=$_dir/$_self ;;
+  esac
+done
+SCRIPT_DIR=$(cd -P "$(dirname -- "$_self")" && pwd)
+
+# shellcheck source=./lib/workspace.sh
+. "$SCRIPT_DIR/lib/workspace.sh"
+
+USAGE='Usage: task-retire [options] [<task>]
+
+      --force      retire despite an env task, uncommitted work, unpushed
+                   commits, a lock, a detached HEAD, or a failing hook
+      --no-fetch   do not fetch before judging "unpushed"
+      --no-hooks   skip .workflow/pre-retire
+  -y, --yes        assume yes to the prompt
+  -h, --help       show this help
+
+Retires a whole task: checks every worktree, runs each pre-retire hook,
+removes the worktrees and their local branches, then moves what is left of
+tasks/<task>/ (notes and plans) to archive/<task>/. Prints the archive path.
+
+With no <task>, retires the task holding the current directory.
+
+Nothing is removed until every worktree passes and every pre-retire hook
+succeeds. A hook may run again on a re-run, so hooks must be safe to repeat.
+Plan symlinks are replaced with real copies, because Claude Code deletes
+~/.claude/plans/ files after 30 days. Remote branches are left alone: that
+is your host'"'"'s delete-on-merge job.'
+
+force=0
+fetch=1
+hooks=1
+task=
+
+while [ $# -gt 0 ]; do
+  case $1 in
+    --force)    force=1 ;;
+    --no-fetch) fetch=0 ;;
+    --no-hooks) hooks=0 ;;
+    -y|--yes)   WORKFLOW_YES=1; export WORKFLOW_YES ;;
+    -h|--help)  printf '%s\n' "$USAGE"; exit 0 ;;
+    --)         shift; break ;;
+    -*)         usage_die "unknown option: $1" ;;
+    *)          [ -z "$task" ] || usage_die "unexpected argument: $1"; task=$1 ;;
+  esac
+  shift
+done
+
+while [ $# -gt 0 ]; do
+  [ -z "$task" ] || usage_die "unexpected argument: $1"
+  task=$1
+  shift
+done
+
+ws_require_workspace
+
+if [ -z "$task" ]; then
+  task=$(ws_task_from_pwd) || \
+    usage_die "run this from inside a task, or name one: task-retire <task>"
+fi
+case $task in
+  */*|.|..) usage_die "invalid task name: $task" ;;
+esac
+
+task_dir=$(ws_task_dir "$task")
+if [ ! -d "$task_dir" ]; then
+  die 3 "no such task: tasks/$task" "list what exists with: scripts/task-list"
+fi
+
+# --- worktrees ---------------------------------------------------------------
+
+# Clear records left behind by hand-deleted directories before judging anything.
+while IFS= read -r repo; do
+  [ -n "$repo" ] || continue
+  git -C "$REPOS_DIR/$repo.git" worktree prune
+done <<EOT
+$(ws_list_repos)
+EOT
+
+records=$(ws_task_worktrees "$task")
+n_wt=$(printf '%s' "$records" | grep -c . || true)
+
+branch=
+while IFS=$'\t' read -r repo p b f; do
+  [ -n "$repo" ] || continue
+  if [ -n "$b" ]; then branch=$b; break; fi
+done <<EOT
+$records
+EOT
+
+log_step "retiring task $task${branch:+ ($branch)}"
+
+# --- preflight ---------------------------------------------------------------
+
+problems=0
+
+problem() {
+  if [ "$force" = 1 ]; then
+    log_warn "$1 (continuing because of --force)"
+  else
+    log_error "$1"
+    problems=$((problems + 1))
+  fi
+}
+
+if [ -n "$branch" ] && ws_is_env_branch "$branch" "$REPOS_DIR/$(printf '%s' "$records" | head -n 1 | cut -f1).git"; then
+  problem "tasks/$task is an env task (branch $branch)"
+fi
+
+fetched=
+while IFS=$'\t' read -r repo p b f; do
+  [ -n "$repo" ] || continue
+  dir=$REPOS_DIR/$repo.git
+  rel=$(ws_rel "$p")
+
+  if [ "$fetch" = 1 ] && [[ $fetched != *" $repo "* ]]; then
+    fetched="$fetched $repo "
+    if git -C "$dir" remote get-url origin >/dev/null 2>&1; then
+      git -C "$dir" fetch --prune --quiet origin || \
+        log_warn "$repo: fetch failed; 'unpushed' may be judged against stale refs"
+    fi
+  fi
+
+  case $f in
+    *locked*) problem "$rel is locked" ;;
+  esac
+  if [ -z "$b" ]; then
+    problem "$rel is on a detached HEAD"
+  fi
+
+  if [ -d "$p" ]; then
+    if ws_is_dirty "$p"; then
+      problem "$rel has uncommitted changes"
+      git --no-optional-locks -C "$p" status --short | head -n 10 >&2
+    fi
+    unpushed=$(ws_unpushed_count "$p")
+    if [ "$unpushed" -gt 0 ]; then
+      problem "$rel has $unpushed commit(s) not on any origin ref"
+      git -C "$p" log --oneline HEAD --not --remotes=origin | head -n 10 >&2
+    fi
+    if [ -n "$(git -C "$p" stash list 2>/dev/null)" ]; then
+      # The stash ref is repository-global; it survives the worktree.
+      log_warn "$repo has stashed changes; they are kept"
+    fi
+  fi
+done <<EOT
+$records
+EOT
+
+if [ "$problems" -gt 0 ]; then
+  die 4 "nothing was retired" "commit, push or stash, or pass --force"
+fi
+
+if ! confirm "Retire task $task ($n_wt worktrees)?" n; then
+  die 6 "cancelled"
+fi
+
+# --- hooks -------------------------------------------------------------------
+
+if [ "$hooks" = 1 ]; then
+  WORKFLOW_FORCE=$force
+  export WORKFLOW_FORCE
+  while IFS=$'\t' read -r repo p b f; do
+    [ -n "$repo" ] || continue
+    [ -d "$p" ] || continue
+    ws_hook_env pre-retire "$task" "$repo" "$REPOS_DIR/$repo.git" "${b:-$branch}" "$p"
+    if ! ws_run_hook pre-retire; then
+      if [ "$force" != 1 ]; then
+        log_error "pre-retire hook failed in $(ws_rel "$p")"
+        log_info "nothing was removed; the hook is the only thing that can tear down"
+        log_info "branch resources, and it cannot be retried once the worktree is gone"
+        exit 5
+      fi
+      log_warn "pre-retire hook failed in $(ws_rel "$p"); continuing because of --force"
+    fi
+  done <<EOT
+$records
+EOT
+fi
+
+# unique_path PATH - PATH, or PATH-<date>, or PATH-<date>-<time>: never an
+# existing one, so nothing is ever merged into an older copy.
+unique_path() {
+  local p=$1
+  if [ ! -e "$p" ] && [ ! -L "$p" ]; then
+    printf '%s\n' "$p"
+    return 0
+  fi
+  p=$1-$(date +%Y-%m-%d)
+  if [ ! -e "$p" ] && [ ! -L "$p" ]; then
+    printf '%s\n' "$p"
+    return 0
+  fi
+  printf '%s\n' "$1-$(date +%Y-%m-%d-%H%M%S)"
+}
+
+# --- remove ------------------------------------------------------------------
+
+cd "$WORKSPACE_ROOT"
+
+while IFS=$'\t' read -r repo p b f; do
+  [ -n "$repo" ] || continue
+  dir=$REPOS_DIR/$repo.git
+
+  # Plans linked into the worktree itself are ignored files, which
+  # `git worktree remove` deletes without asking.
+  plans=$p/.claude/plans
+  if [ -d "$plans" ] && [ ! -L "$plans" ] && [ -n "$(ls -A "$plans" 2>/dev/null)" ]; then
+    dst=$(unique_path "$task_dir/.claude/plans/$repo")
+    mkdir -p "$(dirname -- "$dst")"
+    cp -RP "$plans" "$dst"
+    log_info "rescued  $(ws_rel "$plans") to $(ws_rel "$dst")"
+  fi
+
+  case $f in
+    *locked*) git -C "$dir" worktree unlock "$p" 2>/dev/null || true ;;
+  esac
+
+  if [ "$force" = 1 ]; then
+    git -C "$dir" worktree remove --force "$p" 2>/dev/null || \
+      log_warn "git worktree remove failed for $(ws_rel "$p")"
+  else
+    git -C "$dir" worktree remove "$p" 2>/dev/null || \
+      log_warn "git worktree remove failed for $(ws_rel "$p")"
+  fi
+  git -C "$dir" worktree prune
+  if [ ! -e "$p" ]; then
+    log_success "removed $(ws_rel "$p")"
+  fi
+
+  # Every commit is on an origin ref (or --force said to drop it), so -D loses
+  # nothing; -d would refuse a squash-merged branch. The default and env
+  # branches stay: the bare repository's HEAD points at one of them.
+  if [ -n "$b" ] && git -C "$dir" show-ref --verify --quiet "refs/heads/$b"; then
+    default=$(ws_default_branch "$dir" 2>/dev/null) || default=
+    if [ "$b" = "$default" ] || ws_is_env_branch "$b" "$dir"; then
+      log_info "kept     branch $b of $repo"
+    elif git -C "$dir" branch -D "$b" >/dev/null; then
+      log_success "deleted branch $b of $repo"
+    else
+      log_warn "could not delete branch $b of $repo"
+    fi
+  fi
+done <<EOT
+$records
+EOT
+
+# --- plan links --------------------------------------------------------------
+
+if [ -d "$task_dir/.claude/plans" ]; then
+  while IFS= read -r -d '' link; do
+    if [ -e "$link" ]; then
+      tmp=$link.retire-tmp
+      cp -RL "$link" "$tmp"
+      rm -f "$link"
+      mv "$tmp" "$link"
+      log_info "copied   $(ws_rel "$link") from its link target"
+    else
+      log_warn "$(ws_rel "$link") is a dangling link; kept as is"
+    fi
+  done < <(find "$task_dir/.claude/plans" -type l -print0)
+fi
+
+# --- archive -----------------------------------------------------------------
+
+left=
+while IFS=$'\t' read -r repo p b f; do
+  [ -n "$repo" ] || continue
+  if [ -e "$p" ]; then
+    left="$left $(ws_rel "$p")"
+  fi
+done <<EOT
+$records
+EOT
+
+if [ -n "$left" ]; then
+  die 7 "still on disk:$left" \
+        "tasks/$task was not archived; remove those, then re-run"
+fi
+
+mkdir -p "$ARCHIVE_DIR"
+dst=$(unique_path "$ARCHIVE_DIR/$task")
+mv "$task_dir" "$dst"
+log_success "archived $(ws_rel "$dst")"
+log_detail "your shell may be inside a removed directory; run: cd $WORKSPACE_ROOT"
+printf '%s\n' "$dst"

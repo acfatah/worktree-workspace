@@ -606,3 +606,103 @@ ws_copy_shared() {
     fi
   done < <(find "$src" \( -type f -o -type l \) -print0)
 }
+
+# ws_list_tasks - one task folder name per line, sorted.
+ws_list_tasks() {
+  local d
+  if [ ! -d "$TASKS_DIR" ]; then
+    return 0
+  fi
+  for d in "$TASKS_DIR"/*/; do
+    [ -d "$d" ] || continue
+    d=${d%/}
+    printf '%s\n' "${d##*/}"
+  done
+}
+
+# ws_task_from_pwd - the task holding the current directory, or return 1.
+ws_task_from_pwd() {
+  local cur rel
+  cur=$(ws_realpath "$PWD")
+  case $cur in
+    "$TASKS_DIR"/*)
+      rel=${cur#"$TASKS_DIR"/}
+      printf '%s\n' "${rel%%/*}"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# ws_task_worktrees TASK - repo<TAB>path<TAB>branch<TAB>flags for every
+# worktree registered under tasks/TASK/. Read from git's records rather than
+# the directory, so a locked or missing worktree is still seen.
+ws_task_worktrees() {
+  local task=$1 repo dir p b f prefix
+  prefix=$(ws_task_dir "$task")/
+  while IFS= read -r repo; do
+    [ -n "$repo" ] || continue
+    dir=$REPOS_DIR/$repo.git
+    while IFS=$'\t' read -r p b f; do
+      case $p in
+        "$prefix"*) printf '%s\t%s\t%s\t%s\n' "$repo" "$p" "$b" "$f" ;;
+      esac
+    done <<EOT
+$(ws_worktree_records "$dir")
+EOT
+  done <<EOT
+$(ws_list_repos)
+EOT
+}
+
+# ------------------------------------------------------------------------------
+# Landing
+# ------------------------------------------------------------------------------
+
+# ws_landed REPO_DIR BRANCH [PR_STATE] - verdict<TAB>evidence, where verdict is
+# merged, gone, new or open. A task has landed when every repository says
+# merged or gone.
+ws_landed() {
+  local dir=$1 b=$2 pr_state=${3:-} base base_ref line upstream track
+
+  if [ "$pr_state" = MERGED ]; then
+    printf 'merged\tpull request\n'
+    return 0
+  fi
+
+  line=$(ws_branch_table "$dir" | awk -F'\t' -v n="$b" '$1 == n { print; exit }')
+  upstream=$(printf '%s' "$line" | cut -f2)
+  track=$(printf '%s' "$line" | cut -f3)
+
+  base=$(ws_default_branch "$dir" 2>/dev/null) || base=
+  base_ref=
+  if [ -n "$base" ]; then
+    base_ref=$(ws_base_ref "$dir" "$base")
+  fi
+
+  # A branch with no upstream and no commits beyond the base was never worked
+  # on. git calls it merged, and keeps doing so as the base moves on, but
+  # retiring a fresh task would be a nasty surprise. The upstream test
+  # matters: a pushed branch that was fast-forward merged has landed.
+  if [ -z "$upstream" ] && [ -n "$base_ref" ] &&
+     git -C "$dir" merge-base --is-ancestor "refs/heads/$b" "$base_ref" 2>/dev/null; then
+    printf 'new\tno commits yet\n'
+    return 0
+  fi
+
+  if [ -n "$base_ref" ] && [ "$b" != "$base" ] &&
+     git -C "$dir" merge-base --is-ancestor "refs/heads/$b" "$base_ref" 2>/dev/null; then
+    printf 'merged\tmerged into %s\n' "$base"
+    return 0
+  fi
+
+  case $track in
+    *gone*)
+      printf 'gone\tremote branch deleted\n'
+      return 0
+      ;;
+  esac
+
+  printf 'open\t-\n'
+}
