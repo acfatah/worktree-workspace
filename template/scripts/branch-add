@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+_self=${BASH_SOURCE[0]}
+while [ -L "$_self" ]; do
+  _dir=$(cd -P "$(dirname -- "$_self")" && pwd)
+  _self=$(readlink -- "$_self")
+  case $_self in
+    /*) ;;
+    *)  _self=$_dir/$_self ;;
+  esac
+done
+SCRIPT_DIR=$(cd -P "$(dirname -- "$_self")" && pwd)
+
+# shellcheck source=./lib/workspace.sh
+. "$SCRIPT_DIR/lib/workspace.sh"
+
+# The $(...) in the example is meant literally.
+# shellcheck disable=SC2016
+USAGE='Usage: branch-add [options] <branch> <repo>...
+
+      --no-fetch     do not fetch before checking out
+      --no-hooks     skip .workflow/post-create
+      --no-shared    do not copy shared/<repo>/ into new worktrees
+  -h, --help         show this help
+
+Checks out an existing branch, such as main, dev or a teammate'"'"'s
+feat/x, in branches/<name>/ (the branch with "/" turned into "-"), one
+worktree per repository. It is for running or reviewing a branch; start
+your own work with scripts/task-create. Prints the folder path on stdout:
+
+  cd "$(scripts/branch-add main app api)"
+
+The branch must exist locally or on origin; branch-add never creates one.
+Every repository is checked before anything is created. Re-running adds
+repositories and skips worktrees that exist.'
+
+fetch=1
+hooks=1
+shared=1
+branch=
+repos=()
+
+add_positional() {
+  if [ -z "$branch" ]; then
+    branch=$1
+  else
+    repos+=("$1")
+  fi
+}
+
+while [ $# -gt 0 ]; do
+  case $1 in
+    --no-fetch)   fetch=0 ;;
+    --no-hooks)   hooks=0 ;;
+    --no-shared)  shared=0 ;;
+    -h|--help)    printf '%s\n' "$USAGE"; exit 0 ;;
+    --)           shift; break ;;
+    -*)           usage_die "unknown option: $1" ;;
+    *)            add_positional "$1" ;;
+  esac
+  shift
+done
+
+while [ $# -gt 0 ]; do
+  add_positional "$1"
+  shift
+done
+
+[ -n "$branch" ] || usage_die "missing <branch>"
+[ "${#repos[@]}" -gt 0 ] || usage_die "missing <repo>"
+
+ws_require_workspace
+ws_check_branch "$branch"
+
+name=$(ws_sanitize "$branch")
+co_dir=$(ws_checkout_dir "$name")
+
+# --- check -------------------------------------------------------------------
+
+dirs=()
+seen=' '
+for repo in "${repos[@]}"; do
+  case $seen in
+    *" $repo "*) usage_die "repository listed twice: $repo" ;;
+  esac
+  seen="$seen$repo "
+  dirs+=("$(ws_repo_dir "$repo")")
+done
+
+if [ "$fetch" = 1 ]; then
+  for i in "${!repos[@]}"; do
+    git -C "${dirs[$i]}" fetch --prune --quiet origin 2>/dev/null ||
+      log_warn "fetch failed for ${repos[$i]}; continuing from local refs"
+  done
+fi
+
+actions=()
+for i in "${!repos[@]}"; do
+  if ! git -C "${dirs[$i]}" show-ref --verify --quiet "refs/heads/$branch" &&
+     ! git -C "${dirs[$i]}" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+    die 3 "branch '$branch' does not exist in ${repos[$i]}, locally or on origin" \
+          "branch-add checks out existing branches; start new work with:" \
+          "  scripts/task-create $branch ${repos[*]}"
+  fi
+  actions+=("$(ws_wt_preflight "$co_dir/${repos[$i]}" "${repos[$i]}" "$branch" "")")
+done
+
+# --- create ------------------------------------------------------------------
+
+log_step "branch $branch in $(ws_rel "$co_dir")"
+
+for i in "${!repos[@]}"; do
+  repo=${repos[$i]}
+  wt=$co_dir/$repo
+
+  if [ "${actions[$i]}" = exists ]; then
+    log_info "exists   $(ws_rel "$wt")"
+    continue
+  fi
+
+  log_step "adding $repo"
+  ws_wt_create "$wt" "$repo" "$branch" ""
+
+  if [ "$shared" = 1 ]; then
+    ws_copy_shared "$repo" "$wt"
+  fi
+
+  if [ "$hooks" = 1 ]; then
+    ws_hook_env post-create "$name" "$repo" "${dirs[$i]}" "$branch" "$wt"
+    if ! ws_run_hook post-create; then
+      log_error "post-create hook failed in $repo"
+      log_info "the worktree is intact; fix the hook, then re-run it by hand"
+      log_info "or re-run this command, which skips worktrees that exist"
+      exit 5
+    fi
+  fi
+done
+
+log_success "branch ready"
+log_info "cd $(ws_rel "$co_dir")"
+
+printf '%s\n' "$co_dir"

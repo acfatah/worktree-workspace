@@ -1,0 +1,222 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+_self=${BASH_SOURCE[0]}
+while [ -L "$_self" ]; do
+  _dir=$(cd -P "$(dirname -- "$_self")" && pwd)
+  _self=$(readlink -- "$_self")
+  case $_self in
+    /*) ;;
+    *)  _self=$_dir/$_self ;;
+  esac
+done
+SCRIPT_DIR=$(cd -P "$(dirname -- "$_self")" && pwd)
+
+# shellcheck source=./lib/workspace.sh
+. "$SCRIPT_DIR/lib/workspace.sh"
+
+USAGE='Usage: branch-list [options] [<name>...]
+
+      --fetch          fetch each repository first
+      --porcelain      tab separated, uncoloured, no header
+  -h, --help           show this help
+
+Lists branches/<name>/ grouped by checkout, one row per repository: state,
+ahead and behind its upstream, and the upstream.
+
+--porcelain fields, one line per worktree, in order and stable:
+  name  repo  branch  path  state  ahead  behind  upstream'
+
+do_fetch=0
+porcelain=0
+names=
+
+while [ $# -gt 0 ]; do
+  case $1 in
+    --fetch)     do_fetch=1 ;;
+    --porcelain) porcelain=1 ;;
+    -h|--help)   printf '%s\n' "$USAGE"; exit 0 ;;
+    --)          shift; break ;;
+    -*)          usage_die "unknown option: $1" ;;
+    *)           names=$names$1$'\n' ;;
+  esac
+  shift
+done
+
+while [ $# -gt 0 ]; do
+  names=$names$1$'\n'
+  shift
+done
+
+ws_require_workspace
+
+if [ -n "$names" ]; then
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    if [ ! -d "$(ws_checkout_dir "$name")" ]; then
+      die 3 "no such checkout: branches/$name"
+    fi
+  done <<EOT
+$names
+EOT
+else
+  names=$(ws_list_checkouts)
+fi
+
+if [ -z "$names" ]; then
+  log_info "no branch checkouts; add one with: scripts/branch-add <branch> <repo>..."
+  exit 0
+fi
+
+loaded=' '
+branch_rows=
+
+repo_table() {
+  local repo=$1 dir=$REPOS_DIR/$1.git
+  case $loaded in
+    *" $repo "*) return 0 ;;
+  esac
+  loaded="$loaded$repo "
+  if [ "$do_fetch" = 1 ]; then
+    git -C "$dir" fetch --prune --quiet origin 2>/dev/null || \
+      log_warn "$repo: fetch failed"
+  fi
+  branch_rows=$branch_rows$(ws_branch_table "$dir" | ws_prefix_rows "$repo")$'\n'
+}
+
+# Rows: name, repo, branch, path, state, ahead, behind, upstream. A checkout
+# without worktrees gets one row with an empty repo.
+rows=
+
+while IFS= read -r name; do
+  [ -n "$name" ] || continue
+  records=$(ws_checkout_worktrees "$name")
+  if [ -z "$records" ]; then
+    rows=$rows$name$'\t\t\t\t\t\t\t\n'
+    continue
+  fi
+
+  while IFS=$'\t' read -r repo p b f; do
+    [ -n "$repo" ] || continue
+    repo_table "$repo"
+
+    branch=${b:-'(detached)'}
+    upstream=
+    track=
+    if [ -n "$b" ]; then
+      line=$(ws_row_lookup "$branch_rows" "$repo" "$b")
+      upstream=$(printf '%s' "$line" | cut -f2)
+      track=$(printf '%s' "$line" | cut -f3)
+    fi
+
+    ahead=0
+    behind=0
+    case $track in
+      *gone*)
+        ahead=-
+        behind=-
+        upstream=gone
+        ;;
+      *)
+        a=$(printf '%s' "$track" | sed -n 's/.*ahead \([0-9][0-9]*\).*/\1/p')
+        bh=$(printf '%s' "$track" | sed -n 's/.*behind \([0-9][0-9]*\).*/\1/p')
+        if [ -n "$a" ]; then ahead=$a; fi
+        if [ -n "$bh" ]; then behind=$bh; fi
+        ;;
+    esac
+    if [ -z "$upstream" ]; then
+      upstream='(none)'
+    fi
+
+    state=clean
+    case $f in
+      *locked*) state=locked ;;
+    esac
+    if [ ! -d "$p" ]; then
+      state=missing
+    elif [ "$state" = clean ] && ws_is_dirty "$p"; then
+      state=dirty
+    fi
+
+    rows=$rows$name$'\t'$repo$'\t'$branch$'\t'$p$'\t'$state$'\t'$ahead$'\t'$behind$'\t'$upstream$'\n'
+  done <<EOT
+$records
+EOT
+done <<EOT
+$names
+EOT
+
+if [ "$porcelain" = 1 ]; then
+  while IFS=$'\t' read -r name repo branch path state ahead behind upstream; do
+    [ -n "$name" ] || continue
+    [ -n "$repo" ] || continue
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$name" "$repo" "$branch" "$path" "$state" "$ahead" "$behind" "$upstream"
+  done <<EOT
+$rows
+EOT
+  exit 0
+fi
+
+# ab_cell AHEAD BEHIND - "+1/-0", or "-" when the upstream is gone.
+ab_cell() {
+  if [ "$1" = - ]; then printf -- '-\n'; else printf '+%s/-%s\n' "$1" "$2"; fi
+}
+
+w_repo=4
+w_state=5
+w_ab=5
+while IFS=$'\t' read -r name repo branch path state ahead behind upstream; do
+  [ -n "$repo" ] || continue
+  ab=$(ab_cell "$ahead" "$behind")
+  if [ ${#repo} -gt "$w_repo" ]; then w_repo=${#repo}; fi
+  if [ ${#state} -gt "$w_state" ]; then w_state=${#state}; fi
+  if [ ${#ab} -gt "$w_ab" ]; then w_ab=${#ab}; fi
+done <<EOT
+$rows
+EOT
+
+while IFS= read -r name; do
+  [ -n "$name" ] || continue
+  first_branch=
+  while IFS=$'\t' read -r n repo branch path state ahead behind upstream; do
+    [ "$n" = "$name" ] || continue
+    [ -n "$repo" ] || continue
+    first_branch=$branch
+    break
+  done <<EOT
+$rows
+EOT
+  if [ -z "$first_branch" ]; then
+    printf '%s  %s\n' "$(PC_bold "$name")" "$(PC_dim '(no worktrees)')"
+    continue
+  fi
+  printf '%s  %s\n' "$(PC_bold "$name")" "$(PC_dim "$first_branch")"
+
+  while IFS=$'\t' read -r n repo branch path state ahead behind upstream; do
+    [ "$n" = "$name" ] || continue
+    [ -n "$repo" ] || continue
+    ab=$(ab_cell "$ahead" "$behind")
+
+    # Pad first, colour second: the escapes must not enter the width maths.
+    painted_state=$(printf '%-*s' "$w_state" "$state")
+    case $state in
+      dirty)          painted_state=$(PC_yellow "$painted_state") ;;
+      locked|missing) painted_state=$(PC_red "$painted_state") ;;
+      *)              painted_state=$(PC_dim "$painted_state") ;;
+    esac
+
+    case $upstream in
+      gone)     painted_up=$(PC_red "$upstream") ;;
+      '(none)') painted_up=$(PC_dim "$upstream") ;;
+      *)        painted_up=$upstream ;;
+    esac
+
+    printf '  %-*s  %s  %-*s  %s\n' \
+      "$w_repo" "$repo" "$painted_state" "$w_ab" "$ab" "$painted_up"
+  done <<EOT
+$rows
+EOT
+done <<EOT
+$names
+EOT

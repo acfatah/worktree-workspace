@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+_self=${BASH_SOURCE[0]}
+while [ -L "$_self" ]; do
+  _dir=$(cd -P "$(dirname -- "$_self")" && pwd)
+  _self=$(readlink -- "$_self")
+  case $_self in
+    /*) ;;
+    *)  _self=$_dir/$_self ;;
+  esac
+done
+SCRIPT_DIR=$(cd -P "$(dirname -- "$_self")" && pwd)
+
+# shellcheck source=./lib/workspace.sh
+. "$SCRIPT_DIR/lib/workspace.sh"
+
+USAGE='Usage: branch-remove [options] [<name>]
+
+      --force      remove despite uncommitted work, unpushed commits, a
+                   lock, a detached HEAD, or a failing hook
+      --no-fetch   do not fetch before judging "unpushed"
+      --no-hooks   skip .workflow/pre-retire
+  -y, --yes        assume yes to the prompt
+  -h, --help       show this help
+
+Removes a branch checkout: checks every worktree in branches/<name>/, runs
+each pre-retire hook, removes the worktrees, then the empty folder. Local
+branches are deleted too, except the default branch and env branches.
+
+With no <name>, removes the checkout holding the current directory.
+Nothing is removed until every worktree passes and every hook succeeds.'
+
+force=0
+fetch=1
+hooks=1
+name=
+
+while [ $# -gt 0 ]; do
+  case $1 in
+    --force)    force=1 ;;
+    --no-fetch) fetch=0 ;;
+    --no-hooks) hooks=0 ;;
+    -y|--yes)   WORKFLOW_YES=1; export WORKFLOW_YES ;;
+    -h|--help)  printf '%s\n' "$USAGE"; exit 0 ;;
+    --)         shift; break ;;
+    -*)         usage_die "unknown option: $1" ;;
+    *)          [ -z "$name" ] || usage_die "unexpected argument: $1"; name=$1 ;;
+  esac
+  shift
+done
+
+while [ $# -gt 0 ]; do
+  [ -z "$name" ] || usage_die "unexpected argument: $1"
+  name=$1
+  shift
+done
+
+ws_require_workspace
+
+if [ -z "$name" ]; then
+  name=$(ws_checkout_from_pwd) || \
+    usage_die "run this from inside branches/<name>/, or name one: branch-remove <name>"
+fi
+case $name in
+  */*|.|..) usage_die "invalid checkout name: $name" ;;
+esac
+
+co_dir=$(ws_checkout_dir "$name")
+if [ ! -d "$co_dir" ]; then
+  die 3 "no such checkout: branches/$name" "list what exists with: scripts/branch-list"
+fi
+
+# --- worktrees ---------------------------------------------------------------
+
+while IFS= read -r repo; do
+  [ -n "$repo" ] || continue
+  git -C "$REPOS_DIR/$repo.git" worktree prune
+done <<EOT
+$(ws_list_repos)
+EOT
+
+records=$(ws_checkout_worktrees "$name")
+n_wt=$(printf '%s' "$records" | grep -c . || true)
+
+branch=
+while IFS=$'\t' read -r repo p b f; do
+  [ -n "$repo" ] || continue
+  if [ -n "$b" ]; then branch=$b; break; fi
+done <<EOT
+$records
+EOT
+
+log_step "removing branches/$name${branch:+ ($branch)}"
+
+# --- preflight ---------------------------------------------------------------
+
+problems=0
+
+problem() {
+  if [ "$force" = 1 ]; then
+    log_warn "$1 (continuing because of --force)"
+  else
+    log_error "$1"
+    problems=$((problems + 1))
+  fi
+}
+
+while IFS=$'\t' read -r repo p b f; do
+  [ -n "$repo" ] || continue
+  dir=$REPOS_DIR/$repo.git
+  rel=$(ws_rel "$p")
+
+  if [ "$fetch" = 1 ] && git -C "$dir" remote get-url origin >/dev/null 2>&1; then
+    git -C "$dir" fetch --prune --quiet origin || \
+      log_warn "$repo: fetch failed; 'unpushed' may be judged against stale refs"
+  fi
+
+  case $f in
+    *locked*) problem "$rel is locked" ;;
+  esac
+  if [ -z "$b" ]; then
+    problem "$rel is on a detached HEAD"
+  fi
+
+  if [ -d "$p" ]; then
+    if ws_is_dirty "$p"; then
+      problem "$rel has uncommitted changes"
+      git --no-optional-locks -C "$p" status --short | head -n 10 >&2
+    fi
+    unpushed=$(ws_unpushed_count "$p")
+    if [ "$unpushed" -gt 0 ]; then
+      problem "$rel has $unpushed commit(s) not on any origin ref"
+      git -C "$p" log --oneline HEAD --not --remotes=origin | head -n 10 >&2
+    fi
+  fi
+done <<EOT
+$records
+EOT
+
+if [ "$problems" -gt 0 ]; then
+  die 4 "nothing was removed" "commit, push or stash, or pass --force"
+fi
+
+if ! confirm "Remove branches/$name ($n_wt worktrees)?" n; then
+  die 6 "cancelled"
+fi
+
+# --- hooks -------------------------------------------------------------------
+
+if [ "$hooks" = 1 ]; then
+  WORKFLOW_FORCE=$force
+  export WORKFLOW_FORCE
+  while IFS=$'\t' read -r repo p b f; do
+    [ -n "$repo" ] || continue
+    [ -d "$p" ] || continue
+    ws_hook_env pre-retire "$name" "$repo" "$REPOS_DIR/$repo.git" "${b:-$branch}" "$p"
+    if ! ws_run_hook pre-retire; then
+      if [ "$force" != 1 ]; then
+        log_error "pre-retire hook failed in $(ws_rel "$p")"
+        log_info "nothing was removed; fix the hook and re-run"
+        exit 5
+      fi
+      log_warn "pre-retire hook failed in $(ws_rel "$p"); continuing because of --force"
+    fi
+  done <<EOT
+$records
+EOT
+fi
+
+# --- remove ------------------------------------------------------------------
+
+cd "$WORKSPACE_ROOT"
+
+while IFS=$'\t' read -r repo p b f; do
+  [ -n "$repo" ] || continue
+  dir=$REPOS_DIR/$repo.git
+
+  case $f in
+    *locked*) git -C "$dir" worktree unlock "$p" 2>/dev/null || true ;;
+  esac
+
+  if [ "$force" = 1 ]; then
+    git -C "$dir" worktree remove --force "$p" 2>/dev/null || \
+      log_warn "git worktree remove failed for $(ws_rel "$p")"
+  else
+    git -C "$dir" worktree remove "$p" 2>/dev/null || \
+      log_warn "git worktree remove failed for $(ws_rel "$p")"
+  fi
+  git -C "$dir" worktree prune
+  if [ ! -e "$p" ]; then
+    log_success "removed $(ws_rel "$p")"
+  fi
+
+  # Same rule as task-retire: every commit is on origin, so -D loses nothing.
+  if [ -n "$b" ] && git -C "$dir" show-ref --verify --quiet "refs/heads/$b"; then
+    default=$(ws_default_branch "$dir" 2>/dev/null) || default=
+    if [ "$b" = "$default" ] || ws_is_env_branch "$b" "$dir"; then
+      log_info "kept     branch $b of $repo"
+    elif git -C "$dir" branch -D "$b" >/dev/null; then
+      log_success "deleted branch $b of $repo"
+    else
+      log_warn "could not delete branch $b of $repo"
+    fi
+  fi
+done <<EOT
+$records
+EOT
+
+# rmdir refuses a non-empty directory: anything left there is kept.
+if rmdir "$co_dir" 2>/dev/null; then
+  log_success "removed branches/$name"
+  rmdir "$BRANCHES_DIR" 2>/dev/null || true
+else
+  die 7 "branches/$name still holds files; it was kept" \
+        "look inside, move what you need, then remove the folder by hand"
+fi
+log_detail "your shell may be inside a removed directory; run: cd $WORKSPACE_ROOT"

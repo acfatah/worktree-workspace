@@ -20,13 +20,13 @@ USAGE='Usage: sync-repos [options] [<repo>...]
   --no-prune      do not pass --prune to fetch
   --no-tags       do not fetch tags
   --fail-fast     stop at the first failure
-  --no-ff         do not fast-forward env-task worktrees
+  --no-ff         do not fast-forward branch checkouts
   -h, --help      show this help
 
 Fetches every bare repository under repos/, so origin/* is current for new
-tasks. Then fast-forwards each env-task worktree (tasks/main/, tasks/dev/,
-...) that is clean and behind origin/<branch>. A dirty, ahead or diverged
-one is skipped with a warning. Feature tasks are never touched.'
+tasks. Then fast-forwards each branch checkout under branches/ that is clean
+and behind origin/<branch>. A dirty, ahead or diverged one is skipped with a
+warning. Tasks are never touched.'
 
 ff=1
 prune=1
@@ -125,20 +125,19 @@ done <<EOT
 $names
 EOT
 
-# --- env tasks -----------------------------------------------------------------
+# --- branch checkouts ---------------------------------------------------------
 
 # Only repositories fetched just now: fast-forwarding to stale refs is noise.
 if [ "$ff" = 1 ] && [ -n "$synced" ]; then
-  while IFS= read -r task; do
-    [ -n "$task" ] || continue
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
     while IFS=$'\t' read -r repo p b f; do
       [ -n "$repo" ] || continue
       [ -n "$b" ] || continue
       [[ $synced == *" $repo "* ]] || continue
       dir=$REPOS_DIR/$repo.git
-      ws_is_env_branch "$b" "$dir" || continue
 
-      label=tasks/$task/$repo
+      label=branches/$name/$repo
       if [ ! -d "$p" ]; then
         record "$label" skipped "directory is missing"
         n_skipped=$((n_skipped + 1))
@@ -179,10 +178,10 @@ if [ "$ff" = 1 ] && [ -n "$synced" ]; then
         n_skipped=$((n_skipped + 1))
       fi
     done <<EOT
-$(ws_task_worktrees "$task")
+$(ws_checkout_worktrees "$name")
 EOT
   done <<EOT
-$(ws_list_tasks)
+$(ws_list_checkouts)
 EOT
 fi
 

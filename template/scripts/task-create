@@ -33,7 +33,10 @@ CLAUDE.md, NOTES.md, .claude/plans/ and one worktree per repository, all on
   cd "$(scripts/task-create feat/login app api)"
 
 Every repository is checked before anything is created. Re-running resumes
-a task that stopped partway: existing worktrees are skipped.'
+a task that stopped partway: existing worktrees are skipped.
+
+An env branch, such as main, is never a task: check it out with
+scripts/branch-add instead.'
 
 base=
 fetch=1
@@ -89,6 +92,10 @@ for repo in "${repos[@]}"; do
   esac
   seen="$seen$repo "
   dir=$(ws_repo_dir "$repo")
+  if ws_is_env_branch "$branch" "$dir"; then
+    die 4 "'$branch' is an env branch of $repo, not a task" \
+          "check it out with: scripts/branch-add $branch ${repos[*]}"
+  fi
   dirs+=("$dir")
 done
 
@@ -107,7 +114,7 @@ for i in "${!repos[@]}"; do
   if [ -z "$repo_base" ]; then
     repo_base=$(ws_default_branch "${dirs[$i]}" 2>/dev/null) || repo_base=
   fi
-  action=$(ws_wt_preflight "$task" "${repos[$i]}" "$branch" "$repo_base")
+  action=$(ws_wt_preflight "$(ws_wt_path "$task" "${repos[$i]}")" "${repos[$i]}" "$branch" "$repo_base")
   bases+=("$repo_base")
   actions+=("$action")
 done
@@ -127,7 +134,7 @@ for i in "${!repos[@]}"; do
   fi
 
   log_step "adding $repo"
-  ws_wt_create "$task" "$repo" "$branch" "${bases[$i]}"
+  ws_wt_create "$wt" "$repo" "$branch" "${bases[$i]}"
 
   if [ "$shared" = 1 ]; then
     ws_copy_shared "$repo" "$wt"

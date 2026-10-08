@@ -33,7 +33,7 @@ Verdicts:
   review    landed, but commits are on no origin ref (a squash merge, or
             work after it); never retired here, use task-retire --force
   skip      landed, but a worktree is dirty, locked or missing
-  env       an env task; never pruned
+  env       on an env branch, which belongs in branches/; never pruned
   keep      nothing landed yet, or no worktrees'
 
 do_it=0
@@ -166,7 +166,7 @@ EOT
 
   if [ "$is_env" = 1 ]; then
     verdict='env'
-    note="env task"
+    note="env branch; belongs in branches/"
   elif [ "$total" = 0 ]; then
     verdict=keep
     note="no worktrees"

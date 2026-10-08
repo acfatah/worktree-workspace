@@ -24,14 +24,14 @@ USAGE='Usage: task-list [options] [<task>...]
 
 Lists tasks/<task>/ grouped by task, one row per repository. A task has
 landed when every repository has: its pull request merged, its branch merged
-into the default branch, or its remote branch deleted. Env tasks are marked
-and never counted as landed.
+into the default branch, or its remote branch deleted. Branch checkouts
+under branches/ are listed by scripts/branch-list.
 
 Touches the network only with --fetch or the pull request column.
 
 --porcelain fields, one line per worktree, in order and stable:
   task  repo  branch  path  state  ahead  behind  upstream  pr  pr_state
-  landed  env'
+  landed'
 
 want_pr=auto
 do_fetch=0
@@ -113,7 +113,7 @@ repo_tables() {
 }
 
 # Rows: task, repo, branch, path, state, ahead, behind, upstream, pr,
-# pr_state, landed, env, evidence. A task without worktrees gets one row with
+# pr_state, landed, evidence. A task without worktrees gets one row with
 # an empty repo.
 rows=
 
@@ -121,7 +121,7 @@ while IFS= read -r task; do
   [ -n "$task" ] || continue
   records=$(ws_task_worktrees "$task")
   if [ -z "$records" ]; then
-    rows=$rows$task$'\t\t\t\t\t\t\t\t\t\t\t\t\n'
+    rows=$rows$task$'\t\t\t\t\t\t\t\t\t\t\t\n'
     continue
   fi
 
@@ -178,20 +178,15 @@ while IFS= read -r task; do
       fi
     fi
 
-    env=0
     landed=-
     evidence=
     if [ -n "$b" ]; then
-      if ws_is_env_branch "$b" "$dir"; then
-        env=1
-      else
-        verdict=$(ws_landed "$dir" "$b" "${pr_state#-}")
-        landed=${verdict%%$'\t'*}
-        evidence=${verdict#*$'\t'}
-      fi
+      verdict=$(ws_landed "$dir" "$b" "${pr_state#-}")
+      landed=${verdict%%$'\t'*}
+      evidence=${verdict#*$'\t'}
     fi
 
-    rows=$rows$task$'\t'$repo$'\t'$branch$'\t'$p$'\t'$state$'\t'$ahead$'\t'$behind$'\t'$upstream$'\t'$pr_num$'\t'$pr_state$'\t'$landed$'\t'$env$'\t'$evidence$'\n'
+    rows=$rows$task$'\t'$repo$'\t'$branch$'\t'$p$'\t'$state$'\t'$ahead$'\t'$behind$'\t'$upstream$'\t'$pr_num$'\t'$pr_state$'\t'$landed$'\t'$evidence$'\n'
   done <<EOT
 $records
 EOT
@@ -200,12 +195,12 @@ $tasks
 EOT
 
 if [ "$porcelain" = 1 ]; then
-  while IFS=$'\t' read -r task repo branch path state ahead behind upstream pr pr_state landed env evidence; do
+  while IFS=$'\t' read -r task repo branch path state ahead behind upstream pr pr_state landed evidence; do
     [ -n "$task" ] || continue
     [ -n "$repo" ] || continue
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$task" "$repo" "$branch" "$path" "$state" "$ahead" "$behind" \
-      "$upstream" "$pr" "$pr_state" "$landed" "$env"
+      "$upstream" "$pr" "$pr_state" "$landed"
   done <<EOT
 $rows
 EOT
@@ -227,7 +222,7 @@ w_state=5
 w_ab=5
 w_up=8
 w_pr=2
-while IFS=$'\t' read -r task repo branch path state ahead behind upstream pr pr_state landed env evidence; do
+while IFS=$'\t' read -r task repo branch path state ahead behind upstream pr pr_state landed evidence; do
   [ -n "$repo" ] || continue
   ab=$(ab_cell "$ahead" "$behind")
   prc=$(pr_text "$pr" "$pr_state")
@@ -240,15 +235,14 @@ done <<EOT
 $rows
 EOT
 
-# task_header TASK - "task  branch  [env]  landed n/m", from the rows.
+# task_header TASK - "task  branch  landed n/m", from the rows.
 task_header() {
-  local want=$1 task repo branch path state ahead behind upstream pr pr_state landed env evidence
-  local first_branch='' is_env=0 total=0 done_n=0 summary=''
-  while IFS=$'\t' read -r task repo branch path state ahead behind upstream pr pr_state landed env evidence; do
+  local want=$1 task repo branch path state ahead behind upstream pr pr_state landed evidence
+  local first_branch='' total=0 done_n=0 summary=''
+  while IFS=$'\t' read -r task repo branch path state ahead behind upstream pr pr_state landed evidence; do
     [ "$task" = "$want" ] || continue
     [ -n "$repo" ] || continue
     if [ -z "$first_branch" ]; then first_branch=$branch; fi
-    if [ "$env" = 1 ]; then is_env=1; fi
     total=$((total + 1))
     case $landed in
       merged|gone) done_n=$((done_n + 1)) ;;
@@ -261,9 +255,7 @@ EOT
     printf '%s  %s\n' "$(PC_bold "$want")" "$(PC_dim '(no worktrees)')"
     return 0
   fi
-  if [ "$is_env" = 1 ]; then
-    summary=$(PC_cyan env)
-  elif [ "$done_n" = "$total" ]; then
+  if [ "$done_n" = "$total" ]; then
     summary=$(PC_green landed)
   elif [ "$done_n" -gt 0 ]; then
     summary=$(PC_yellow "landed $done_n/$total")
@@ -275,7 +267,7 @@ while IFS= read -r task; do
   [ -n "$task" ] || continue
   task_header "$task"
 
-  while IFS=$'\t' read -r t repo branch path state ahead behind upstream pr pr_state landed env evidence; do
+  while IFS=$'\t' read -r t repo branch path state ahead behind upstream pr pr_state landed evidence; do
     [ "$t" = "$task" ] || continue
     [ -n "$repo" ] || continue
     ab=$(ab_cell "$ahead" "$behind")

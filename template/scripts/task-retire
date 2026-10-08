@@ -17,8 +17,8 @@ SCRIPT_DIR=$(cd -P "$(dirname -- "$_self")" && pwd)
 
 USAGE='Usage: task-retire [options] [<task>]
 
-      --force      retire despite an env task, uncommitted work, unpushed
-                   commits, a lock, a detached HEAD, or a failing hook
+      --force      retire despite uncommitted work, unpushed commits, a
+                   lock, a detached HEAD, or a failing hook
       --no-fetch   do not fetch before judging "unpushed"
       --no-hooks   skip .workflow/pre-retire
   -y, --yes        assume yes to the prompt
@@ -111,10 +111,6 @@ problem() {
     problems=$((problems + 1))
   fi
 }
-
-if [ -n "$branch" ] && ws_is_env_branch "$branch" "$REPOS_DIR/$(printf '%s' "$records" | head -n 1 | cut -f1).git"; then
-  problem "tasks/$task is an env task (branch $branch)"
-fi
 
 fetched=
 while IFS=$'\t' read -r repo p b f; do

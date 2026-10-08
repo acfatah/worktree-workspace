@@ -20,6 +20,7 @@ _ws_lib_dir=$(cd -P "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
   WORKSPACE_ROOT=${WORKSPACE_ROOT:-$(cd -P "$_ws_lib_dir/../.." && pwd)}
   REPOS_DIR=$WORKSPACE_ROOT/repos
   TASKS_DIR=$WORKSPACE_ROOT/tasks
+  BRANCHES_DIR=$WORKSPACE_ROOT/branches
   ARCHIVE_DIR=$WORKSPACE_ROOT/archive
   SHARED_DIR=$WORKSPACE_ROOT/shared
   DOCS_DIR=$WORKSPACE_ROOT/docs
@@ -118,6 +119,11 @@ ws_wt_path() {
   printf '%s\n' "$TASKS_DIR/$1/$2"
 }
 
+# ws_checkout_dir NAME - branches/NAME, the folder of a branch checkout.
+ws_checkout_dir() {
+  printf '%s\n' "$BRANCHES_DIR/$1"
+}
+
 # ws_rel PATH - path relative to the workspace root, for display.
 ws_rel() {
   local p=$1
@@ -172,9 +178,9 @@ ws_infer_repo() {
       printf '%s\n' "${rel%.git}"
       return 0
       ;;
-    "$TASKS_DIR"/*/*)
-      # tasks/<task>/<repo>/...
-      rel=${cur#"$TASKS_DIR"/*/}
+    "$TASKS_DIR"/*/*|"$BRANCHES_DIR"/*/*)
+      # tasks/<task>/<repo>/... or branches/<name>/<repo>/...
+      rel=${cur#"$WORKSPACE_ROOT"/*/*/}
       printf '%s\n' "${rel%%/*}"
       return 0
       ;;
@@ -370,12 +376,17 @@ ws_pr_state() {
 
 # ws_hook_env EVENT TASK REPO REPO_DIR BRANCH WORKTREE [BASE_BRANCH]
 #
-# WORKFLOW_REPO_DIR is the bare repository, repos/<repo>.git.
+# TASK is the folder name, under tasks/ or branches/; WORKFLOW_KIND says
+# which. WORKFLOW_REPO_DIR is the bare repository, repos/<repo>.git.
 ws_hook_env() {
   WORKFLOW_EVENT=$1
   WORKFLOW_ROOT=$WORKSPACE_ROOT
   WORKFLOW_TASK=$2
-  WORKFLOW_TASK_DIR=$(ws_task_dir "$WORKFLOW_TASK")
+  WORKFLOW_TASK_DIR=${6%/*}
+  case $WORKFLOW_TASK_DIR in
+    "$BRANCHES_DIR"/*) WORKFLOW_KIND=branch ;;
+    *)                 WORKFLOW_KIND=task ;;
+  esac
   WORKFLOW_REPO=$3
   WORKFLOW_REPO_DIR=$4
   WORKFLOW_BRANCH=$5
@@ -386,7 +397,7 @@ ws_hook_env() {
   WORKFLOW_SLUG=$(ws_slug "$WORKFLOW_BRANCH")
   WORKFLOW_FORCE=${WORKFLOW_FORCE:-0}
 
-  export WORKFLOW_EVENT WORKFLOW_ROOT WORKFLOW_TASK WORKFLOW_TASK_DIR \
+  export WORKFLOW_EVENT WORKFLOW_ROOT WORKFLOW_KIND WORKFLOW_TASK WORKFLOW_TASK_DIR \
          WORKFLOW_REPO WORKFLOW_REPO_DIR WORKFLOW_BRANCH WORKFLOW_WORKTREE \
          WORKFLOW_BASE_BRANCH WORKFLOW_WORKTREE_NAME WORKFLOW_SCOPE \
          WORKFLOW_SLUG WORKFLOW_FORCE
@@ -483,15 +494,14 @@ EOT
   fi
 }
 
-# ws_wt_preflight TASK REPO BRANCH BASE - check one worktree before anything is
-# created, so a multi-repo task fails up front instead of half-made. Prints
-# "exists" or "create"; dies otherwise. BASE may be empty when the branch
-# already exists.
+# ws_wt_preflight WORKTREE REPO BRANCH BASE - check one worktree before
+# anything is created, so a multi-repo task fails up front instead of
+# half-made. Prints "exists" or "create"; dies otherwise. BASE may be empty
+# when the branch already exists.
 ws_wt_preflight() {
-  local task=$1 repo=$2 branch=$3 base=$4 dir wt p b f checked_out
+  local wt=$1 repo=$2 branch=$3 base=$4 dir p b f checked_out
 
   dir=$(ws_repo_dir "$repo")
-  wt=$(ws_wt_path "$task" "$repo")
 
   # A stale record left by a hand-deleted directory is the most common
   # confusing failure here, and clearing it costs nothing.
@@ -506,7 +516,7 @@ ws_wt_preflight() {
         return 0
       fi
       die 4 "$(ws_rel "$wt") is already the worktree for '${b:-a detached HEAD}'" \
-            "two branch names can sanitize to one task folder; rename one of them"
+            "two branch names can sanitize to one folder; rename one of them"
     fi
   done <<EOT
 $(ws_worktree_records "$dir")
@@ -531,11 +541,6 @@ EOT
     return 0
   fi
 
-  if ws_is_env_branch "$branch" "$dir"; then
-    die 3 "env branch '$branch' does not exist in $repo, locally or on origin" \
-          "env tasks check out existing branches; they never create one"
-  fi
-
   if [ -z "$base" ]; then
     die 3 "cannot determine a base branch for '$repo'" \
           "pass --base <ref>, or set one:" \
@@ -547,14 +552,13 @@ EOT
   printf 'create\n'
 }
 
-# ws_wt_create TASK REPO BRANCH BASE - add tasks/TASK/REPO on BRANCH. Assumes
+# ws_wt_create WORKTREE REPO BRANCH BASE - add WORKTREE on BRANCH. Assumes
 # ws_wt_preflight said "create".
 ws_wt_create() {
-  local task=$1 repo=$2 branch=$3 base=$4 dir wt base_ref old new
+  local wt=$1 repo=$2 branch=$3 base=$4 dir base_ref old new
   local local_exists=0 remote_exists=0
 
   dir=$(ws_repo_dir "$repo")
-  wt=$(ws_wt_path "$task" "$repo")
 
   if git -C "$dir" show-ref --verify --quiet "refs/heads/$branch"; then
     local_exists=1
@@ -576,8 +580,9 @@ ws_wt_create() {
         git -C "$dir" update-ref "refs/heads/$branch" "$new" "$old"
         log_info "ff       $branch to origin/$branch"
       fi
-      if ws_is_env_branch "$branch" "$dir" &&
-         [ -z "$(git -C "$dir" for-each-ref --format='%(upstream)' "refs/heads/$branch")" ]; then
+      # repo-add leaves the default branch tracking origin, but a branch
+      # pushed without -u has no upstream, and sync-repos needs one.
+      if [ -z "$(git -C "$dir" for-each-ref --format='%(upstream)' "refs/heads/$branch")" ]; then
         git -C "$dir" branch -q --set-upstream-to="origin/$branch" "$branch"
       fi
     fi
@@ -629,11 +634,21 @@ ws_copy_shared() {
 
 # ws_list_tasks - one task folder name per line, sorted.
 ws_list_tasks() {
+  ws_list_dirs "$TASKS_DIR"
+}
+
+# ws_list_checkouts - one branches/ folder name per line, sorted.
+ws_list_checkouts() {
+  ws_list_dirs "$BRANCHES_DIR"
+}
+
+# ws_list_dirs DIR - the names of DIR's subfolders, one per line, sorted.
+ws_list_dirs() {
   local d
-  if [ ! -d "$TASKS_DIR" ]; then
+  if [ ! -d "$1" ]; then
     return 0
   fi
-  for d in "$TASKS_DIR"/*/; do
+  for d in "$1"/*/; do
     [ -d "$d" ] || continue
     d=${d%/}
     printf '%s\n' "${d##*/}"
@@ -642,11 +657,22 @@ ws_list_tasks() {
 
 # ws_task_from_pwd - the task holding the current directory, or return 1.
 ws_task_from_pwd() {
+  ws_folder_from_pwd "$TASKS_DIR"
+}
+
+# ws_checkout_from_pwd - the branches/ folder holding the current directory,
+# or return 1.
+ws_checkout_from_pwd() {
+  ws_folder_from_pwd "$BRANCHES_DIR"
+}
+
+# ws_folder_from_pwd DIR - the subfolder of DIR holding the current directory.
+ws_folder_from_pwd() {
   local cur rel
   cur=$(ws_realpath "$PWD")
   case $cur in
-    "$TASKS_DIR"/*)
-      rel=${cur#"$TASKS_DIR"/}
+    "$1"/*)
+      rel=${cur#"$1"/}
       printf '%s\n' "${rel%%/*}"
       ;;
     *)
@@ -655,12 +681,21 @@ ws_task_from_pwd() {
   esac
 }
 
-# ws_task_worktrees TASK - repo<TAB>path<TAB>branch<TAB>flags for every
-# worktree registered under tasks/TASK/. Read from git's records rather than
-# the directory, so a locked or missing worktree is still seen.
+# ws_task_worktrees TASK - ws_dir_worktrees for tasks/TASK/.
 ws_task_worktrees() {
-  local task=$1 repo dir p b f prefix
-  prefix=$(ws_task_dir "$task")/
+  ws_dir_worktrees "$(ws_task_dir "$1")"
+}
+
+# ws_checkout_worktrees NAME - ws_dir_worktrees for branches/NAME/.
+ws_checkout_worktrees() {
+  ws_dir_worktrees "$(ws_checkout_dir "$1")"
+}
+
+# ws_dir_worktrees DIR - repo<TAB>path<TAB>branch<TAB>flags for every worktree
+# registered under DIR/. Read from git's records rather than the directory, so
+# a locked or missing worktree is still seen.
+ws_dir_worktrees() {
+  local repo dir p b f prefix=$1/
   while IFS= read -r repo; do
     [ -n "$repo" ] || continue
     dir=$REPOS_DIR/$repo.git

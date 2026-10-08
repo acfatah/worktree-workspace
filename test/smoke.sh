@@ -248,7 +248,7 @@ branch_of() { git -C "$1" symbolic-ref --quiet --short HEAD 2>/dev/null; }
   mkdir -p .workflow
   cat > .workflow/post-create <<'HOOK'
 #!/bin/sh
-printf '%s\n' "$WORKFLOW_TASK" "$WORKFLOW_TASK_DIR" "$WORKFLOW_REPO_DIR" "$PWD" > "$WORKFLOW_TASK_DIR/hook.out"
+printf '%s\n' "$WORKFLOW_KIND" "$WORKFLOW_TASK" "$WORKFLOW_TASK_DIR" "$WORKFLOW_REPO_DIR" "$PWD" > "$WORKFLOW_TASK_DIR/hook.out"
 HOOK
   chmod +x .workflow/post-create
   git add -A && git commit -qm hook && git push -q origin feat/hooked
@@ -313,33 +313,18 @@ check "task-add adds a repo on the task's branch" \
 wt task-add nosuch app >/dev/null 2>&1
 check "task-add refuses an unknown task with exit 3" "$( [ $? = 3 ]; echo $? )"
 
-# sync-repos above moved origin/main past the local main that repo-add made.
-wt task-create main app >/dev/null 2>&1
+wt task-create main app >/dev/null 2>"$TEST_ROOT/envtask.err"
 rc=$?
-E=$WS/tasks/main/app
-check "task-create main makes an env task tracking origin/main" \
-  "$( [ "$rc" = 0 ] && [ "$(branch_of "$E")" = main ] && [ "$(upstream "$E")" = origin/main ]; echo $? )" \
-  "rc=$rc branch=$(branch_of "$E") upstream=$(upstream "$E")"
-
-check "an env task fast-forwards a stale local branch" \
-  "$( [ "$(git -C "$E" rev-parse HEAD)" = "$(git -C "$APP" rev-parse origin/main)" ]; echo $? )"
-
-( cd "$TEST_ROOT/seed-app" && git push -q origin main:dev )
-( cd "$TEST_ROOT/seed-legacy" && git push -q origin master:dev )
-printf 'ENV_BRANCHES="main dev"\n' > "$WS/workspace.conf"
-wt task-create dev app >/dev/null 2>&1
-wt task-add dev legacy >/dev/null 2>&1
-rc=$?
-check "task-add onto an env task tracks origin/<branch>" \
-  "$( [ "$rc" = 0 ] && [ "$(upstream "$WS/tasks/dev/legacy")" = origin/dev ]; echo $? )" \
-  "rc=$rc upstream=$(upstream "$WS/tasks/dev/legacy")"
-rm -f "$WS/workspace.conf"
+check "task-create refuses an env branch with exit 4 and points to branch-add" \
+  "$( [ "$rc" = 4 ] && [ ! -e "$WS/tasks/main" ] \
+      && grep -q 'scripts/branch-add main app' "$TEST_ROOT/envtask.err"; echo $? )" \
+  "rc=$rc" "$(cat "$TEST_ROOT/envtask.err")"
 
 printf 'ENV_BRANCHES="staging"\n' > "$WS/workspace.conf"
 wt task-create staging app >/dev/null 2>&1
 rc=$?
-check "task-create refuses an env branch missing from origin with exit 3" \
-  "$( [ "$rc" = 3 ] && [ ! -e "$WS/tasks/staging" ]; echo $? )" "rc=$rc"
+check "task-create refuses a branch listed in ENV_BRANCHES with exit 4" \
+  "$( [ "$rc" = 4 ] && [ ! -e "$WS/tasks/staging" ]; echo $? )" "rc=$rc"
 rm -f "$WS/workspace.conf"
 
 mkdir -p "$WS/shared/app/config"
@@ -362,7 +347,7 @@ rm -rf "$WS/shared/app"
 
 wt task-create feat/hooked app >/dev/null 2>&1
 H=$WS/tasks/feat-hooked
-want=$(printf '%s\n' feat-hooked "$H" "$APP" "$H/app")
+want=$(printf '%s\n' task feat-hooked "$H" "$APP" "$H/app")
 got=$(cat "$H/hook.out" 2>/dev/null)
 check "post-create runs in the worktree with the task environment" \
   "$( [ "$got" = "$want" ]; echo $? )" "want=$want" "got=$got"
@@ -387,6 +372,104 @@ check "a non-empty unregistered target exits 4" "$( [ $? = 4 ]; echo $? )"
 rm -f "$WS/tasks/feat-occ/app/stray"
 wt task-create feat/occ app >/dev/null 2>&1
 check "an empty target directory is reused" "$( [ $? = 0 ]; echo $? )"
+
+# ------------------------------------------------------------------------------
+# branch-add / branch-list / branch-remove
+# ------------------------------------------------------------------------------
+
+( cd "$TEST_ROOT/seed-app" && git push -q origin main:dev feat/hooked:feat/review )
+( cd "$TEST_ROOT/seed-legacy" && git push -q origin master:dev )
+git -C "$APP" fetch -q origin
+
+# sync-repos above moved origin/main past the local main that repo-add made.
+out=$(wt branch-add main app 2>/dev/null)
+rc=$?
+B=$WS/branches/main
+check "branch-add checks out branches/<name>/<repo> and prints the folder" \
+  "$( [ "$rc" = 0 ] && [ "$out" = "$B" ] && [ "$(branch_of "$B/app")" = main ] \
+      && [ "$(upstream "$B/app")" = origin/main ]; echo $? )" \
+  "rc=$rc out=$out branch=$(branch_of "$B/app") upstream=$(upstream "$B/app")"
+
+check "branch-add fast-forwards a stale local branch" \
+  "$( [ "$(git -C "$B/app" rev-parse HEAD)" = "$(git -C "$APP" rev-parse origin/main)" ]; echo $? )"
+
+wt branch-add nosuch app >/dev/null 2>&1
+rc=$?
+check "branch-add refuses a branch missing locally and on origin with exit 3" \
+  "$( [ "$rc" = 3 ] && [ ! -e "$WS/branches/nosuch" ]; echo $? )" "rc=$rc"
+
+wt branch-add main legacy >/dev/null 2>&1
+rc=$?
+check "branch-add checks every repository before creating anything" \
+  "$( [ "$rc" = 3 ] && [ ! -e "$B/legacy" ]; echo $? )" "rc=$rc"
+
+wt branch-add feat/login app >/dev/null 2>&1
+check "branch-add refuses a branch a task has checked out with exit 4" "$( [ $? = 4 ]; echo $? )"
+
+wt branch-add dev app >/dev/null 2>&1
+wt branch-add dev legacy >/dev/null 2>&1
+rc=$?
+D=$WS/branches/dev
+check "re-running branch-add adds a repository on the same branch" \
+  "$( [ "$rc" = 0 ] && [ "$(upstream "$D/app")" = origin/dev ] \
+      && [ "$(upstream "$D/legacy")" = origin/dev ]; echo $? )" \
+  "rc=$rc app=$(upstream "$D/app") legacy=$(upstream "$D/legacy")"
+
+mkdir -p "$WS/shared/app"
+printf 'SECRET=1\n' > "$WS/shared/app/.env"
+wt branch-add feat/review app >/dev/null 2>&1
+V=$WS/branches/feat-review
+want=$(printf '%s\n' branch feat-review "$V" "$APP" "$V/app")
+got=$(cat "$V/hook.out" 2>/dev/null)
+check "branch-add copies shared/ and runs post-create with WORKFLOW_KIND=branch" \
+  "$( [ "$(cat "$V/app/.env" 2>/dev/null)" = SECRET=1 ] && [ "$got" = "$want" ]; echo $? )" \
+  "want=$want" "got=$got"
+rm -rf "$WS/shared/app"
+
+touch "$B/app/stray"
+porc=$(wt branch-list --porcelain main 2>/dev/null)
+check "branch-list --porcelain prints the row and its state" \
+  "$( [ "$(printf '%s\n' "$porc" | cut -f1,2,3,5 | tr '\t' ' ')" = 'main app main dirty' ]; echo $? )" \
+  "$porc"
+rm -f "$B/app/stray"
+
+out=$(wt branch-list 2>/dev/null)
+check "branch-list lists every checkout" \
+  "$( printf '%s\n' "$out" | grep -q '^dev ' && printf '%s\n' "$out" | grep -q '^feat-review '; echo $? )" "$out"
+
+touch "$D/app/stray"
+wt branch-remove dev >/dev/null 2>&1
+rc=$?
+check "branch-remove refuses a dirty worktree with exit 4" \
+  "$( [ "$rc" = 4 ] && [ -e "$D/app/.git" ]; echo $? )" "rc=$rc"
+rm -f "$D/app/stray"
+
+git -C "$D/legacy" commit -q --allow-empty -m local
+wt branch-remove dev >/dev/null 2>&1
+rc=$?
+check "branch-remove refuses unpushed commits with exit 4" \
+  "$( [ "$rc" = 4 ] && [ -e "$D/legacy/.git" ]; echo $? )" "rc=$rc"
+git -C "$D/legacy" reset -q --hard HEAD~1
+
+wt branch-remove dev >/dev/null 2>&1
+rc=$?
+check "branch-remove removes the folder and keeps an env branch" \
+  "$( [ "$rc" = 0 ] && [ ! -e "$D" ] && [ -d "$B" ] \
+      && git -C "$APP" show-ref --verify --quiet refs/heads/dev \
+      && git -C "$LEGACY" show-ref --verify --quiet refs/heads/dev; echo $? )" "rc=$rc"
+
+( cd "$V/app" && "$WS/scripts/branch-remove" >/dev/null 2>&1 )
+rc=$?
+check "branch-remove with no argument removes the checkout holding the cwd" \
+  "$( [ ! -e "$V/app" ] && ! git -C "$APP" show-ref --verify --quiet refs/heads/feat/review; echo $? )" \
+  "rc=$rc"
+check "branch-remove keeps a folder with leftover files and exits 7" \
+  "$( [ "$rc" = 7 ] && [ -f "$V/hook.out" ]; echo $? )" "rc=$rc"
+rm -f "$V/hook.out"
+rmdir "$V"
+
+wt branch-remove nosuch >/dev/null 2>&1
+check "branch-remove refuses an unknown checkout with exit 3" "$( [ $? = 3 ]; echo $? )"
 
 # ------------------------------------------------------------------------------
 # ws_landed / task-list
@@ -443,13 +526,9 @@ check "task-list shows a dirty worktree" \
   "$( [ "$(row feat-land app 5)" = dirty ]; echo $? )" "state=$(row feat-land app 5)"
 rm -f "$L/app/stray"
 
-check "task-list marks an env task" \
-  "$( [ "$(row main app 12)" = 1 ] && [ "$(row feat-land app 12)" = 0 ]; echo $? )" \
-  "main=$(row main app 12)"
-
 out=$(wt task-list 2>/dev/null)
 check "task-list lists every task" \
-  "$( printf '%s\n' "$out" | grep -q '^feat-land ' && printf '%s\n' "$out" | grep -q '^main '; echo $? )" "$out"
+  "$( printf '%s\n' "$out" | grep -q '^feat-land ' && printf '%s\n' "$out" | grep -q '^feat-login '; echo $? )" "$out"
 
 wt task-list nosuch >/dev/null 2>&1
 check "task-list refuses an unknown task with exit 3" "$( [ $? = 3 ]; echo $? )"
@@ -472,11 +551,6 @@ rc=$?
 check "task-retire refuses unpushed commits with exit 4" \
   "$( [ "$rc" = 4 ] && [ -e "$L/legacy/.git" ]; echo $? )" "rc=$rc"
 git -C "$L/legacy" reset -q --hard HEAD~1
-
-wt task-retire main >/dev/null 2>&1
-rc=$?
-check "task-retire refuses an env task with exit 4" \
-  "$( [ "$rc" = 4 ] && [ -e "$WS/tasks/main/app/.git" ]; echo $? )" "rc=$rc"
 
 # Plan links: one at task level, one dangling, one inside a worktree (ignored
 # there through the bare repository's shared info/exclude).
@@ -560,11 +634,6 @@ check "task-retire with no argument retires the task holding the cwd" \
 wt task-retire nosuch >/dev/null 2>&1
 check "task-retire refuses an unknown task with exit 3" "$( [ $? = 3 ]; echo $? )"
 
-wt task-retire --force main >/dev/null 2>&1
-rc=$?
-check "task-retire --force retires an env task and keeps its branch" \
-  "$( [ "$rc" = 0 ] && [ ! -e "$WS/tasks/main" ] \
-      && git -C "$APP" show-ref --verify --quiet refs/heads/main; echo $? )" "rc=$rc"
 
 # ------------------------------------------------------------------------------
 # task-prune
@@ -598,6 +667,8 @@ merge_on_origin seed-legacy feat/pdone master
 merge_on_origin seed-app feat/ppart main
 merge_on_origin seed-app feat/pdirty main
 touch "$WS/tasks/feat-pdirty/app/stray"
+# task-create refuses env branches, so a leftover env task is made by hand.
+git -C "$APP" worktree add -q "$WS/tasks/dev/app" dev
 
 PRUNE_SET="feat-pdone feat-ppart feat-pfresh feat-pdirty feat-gone dev"
 # shellcheck disable=SC2086
@@ -610,7 +681,7 @@ check "task-prune lists a fully landed task as retire" \
 check "task-prune dry run changes nothing" "$( [ -e "$WS/tasks/feat-pdone/app/.git" ]; echo $? )"
 check "task-prune keeps a partial landing" "$( [ "$(verdict feat-ppart)" = partial ]; echo $? )" "$out"
 check "task-prune keeps a fresh task" "$( [ "$(verdict feat-pfresh)" = keep ]; echo $? )" "$out"
-check "task-prune skips an env task, dev included without workspace.conf" \
+check "task-prune skips a task on an env branch, dev included without workspace.conf" \
   "$( [ "$(verdict dev)" = env ]; echo $? )" "$out"
 check "task-prune skips a landed task with a dirty worktree" \
   "$( [ "$(verdict feat-pdirty)" = skip ]; echo $? )" "$out"
@@ -633,7 +704,7 @@ wt task-prune nosuch >/dev/null 2>&1
 check "task-prune refuses an unknown task with exit 3" "$( [ $? = 3 ]; echo $? )"
 
 # ------------------------------------------------------------------------------
-# sync-repos: env-task fast-forward
+# sync-repos: branch-checkout fast-forward
 # ------------------------------------------------------------------------------
 
 # push_main - a new commit on origin main; prints its id.
@@ -642,8 +713,7 @@ push_main() {
       && git push -q origin main && git rev-parse HEAD )
 }
 
-wt task-create main app >/dev/null 2>&1
-E=$WS/tasks/main/app
+E=$WS/branches/main/app
 FR=$WS/tasks/feat-remote/app
 fr_before=$(git -C "$FR" rev-parse HEAD)
 ( cd "$TEST_ROOT/seed-app" && git switch -q feat/remote && git commit -q --allow-empty -m more \
@@ -652,7 +722,7 @@ fr_before=$(git -C "$FR" rev-parse HEAD)
 want=$(push_main)
 wt sync-repos >/dev/null 2>&1
 rc=$?
-check "sync-repos fast-forwards a clean env-task worktree" \
+check "sync-repos fast-forwards a clean branch checkout" \
   "$( [ "$rc" = 0 ] && [ "$(git -C "$E" rev-parse HEAD)" = "$want" ]; echo $? )" \
   "rc=$rc want=$want got=$(git -C "$E" rev-parse HEAD)"
 check "sync-repos leaves a feature task alone" \
@@ -668,7 +738,7 @@ check "sync-repos --no-ff fetches but does not fast-forward" \
 touch "$E/stray"
 wt sync-repos >/dev/null 2>"$TEST_ROOT/sync.err"
 rc=$?
-check "sync-repos skips a dirty env worktree and still exits 0" \
+check "sync-repos skips a dirty branch checkout and still exits 0" \
   "$( [ "$rc" = 0 ] && [ "$(git -C "$E" rev-parse HEAD)" = "$before" ] \
       && grep -q 'uncommitted changes' "$TEST_ROOT/sync.err"; echo $? )" "rc=$rc" "$(cat "$TEST_ROOT/sync.err")"
 rm -f "$E/stray"
@@ -678,7 +748,7 @@ before=$(git -C "$E" rev-parse HEAD)
 push_main >/dev/null
 wt sync-repos >/dev/null 2>"$TEST_ROOT/sync.err"
 rc=$?
-check "sync-repos skips a diverged env worktree with a warning" \
+check "sync-repos skips a diverged branch checkout with a warning" \
   "$( [ "$rc" = 0 ] && [ "$(git -C "$E" rev-parse HEAD)" = "$before" ] \
       && grep -q 'diverged' "$TEST_ROOT/sync.err"; echo $? )" "rc=$rc" "$(cat "$TEST_ROOT/sync.err")"
 git -C "$E" reset -q --hard origin/main

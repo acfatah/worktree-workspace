@@ -29,6 +29,11 @@ project-root/               # a plain folder, not a git repository
 ├── README.md               # Workspace guide and the full script reference.
 ├── .claude/plans/          # Cross-task plan links.
 ├── archive/                # Notes and plans of retired tasks.
+├── branches/               # Optional branch checkouts, made on request.
+│   ├── main/               # Production.
+│   │   ├── client/
+│   │   └── server/
+│   └── dev/                # Development server.
 ├── docs/                   # Cross-task notes, specs and diagrams.
 ├── repos/
 │   ├── client.git/         # Bare clone.
@@ -36,12 +41,6 @@ project-root/               # a plain folder, not a git repository
 ├── scripts/                # Task lifecycle, repo sync, and status.
 ├── shared/<repo>/          # Ignored local files (.env) for new worktrees.
 ├── tasks/
-│   ├── main/               # Optional env task: production.
-│   │   ├── client/
-│   │   └── server/
-│   ├── dev/                # Optional env task: development server.
-│   │   ├── client/
-│   │   └── server/
 │   └── feat-login/         # A task, on branch feat/login.
 │       ├── CLAUDE.md       # Generated: the branch, where notes go.
 │       ├── NOTES.md        # Generated stub.
@@ -140,38 +139,46 @@ After the PRs merge or close:
   landed. A task where only some repositories landed shows `landed 1/2`.
 - `scripts/task-prune` retires every task whose repositories have all
   landed. It is a dry run until you pass `--yes`.
-- `scripts/sync-repos` fetches every repository and fast-forwards the env
-  tasks.
+- `scripts/sync-repos` fetches every repository and fast-forwards the
+  branch checkouts.
 
-### Env Tasks (Optional)
+### Branch Checkouts (Optional)
 
-To run a deployment environment locally, keep a long-lived task on its
-branch:
+To run a deployment environment locally, or to try a teammate's branch,
+check the branch out under `branches/`, apart from your tasks:
 
-- `scripts/task-create main client server` mirrors **production**.
-- `scripts/task-create dev client server` mirrors the **development
+- `scripts/branch-add main client server` mirrors **production**.
+- `scripts/branch-add dev client server` mirrors the **development
   server**.
+- `scripts/branch-add feat/x client` checks out a teammate's branch.
 
-`task-prune` never retires them, `task-retire` refuses them without
-`--force`, and `sync-repos` keeps their clean worktrees fast-forwarded. List
-other env branches in `workspace.conf` as `ENV_BRANCHES="main dev staging"`.
+The branch must already exist. `branches/` is created on the first
+`branch-add`. `scripts/branch-list` shows each checkout's state,
+`sync-repos` keeps the clean ones fast-forwarded, and
+`scripts/branch-remove <name>` removes one.
+
+`task-create` refuses an env branch such as `main` and points to
+`branch-add`, so `tasks/` only ever holds units of work. List other env
+branches in `workspace.conf` as `ENV_BRANCHES="main dev staging"`.
 
 ## Glossary
 
 - **Archive** — `archive/<task>/`, where `task-retire` moves what is left
   of a task folder: notes, and plans as real files.
+- **Branch checkout** — a long-lived worktree, under `branches/<name>/`,
+  of a branch you run or review rather than work on, such as `main` for
+  production. Made by `branch-add`, removed by `branch-remove`, kept
+  current by `sync-repos`. It has no notes and no archive.
 - **Bare clone** — the one clone of a repository, at `repos/<name>.git`,
   with no working files of its own. Every worktree hangs off it, and
   `sync-repos` keeps its `origin/*` refs current.
 - **Base branch** — the branch a new task branch starts from. Defaults to
   the repository's default branch, pinned by `repo-add`; override with
   `repo-add --branch` or `task-create --base`.
-- **Env task** — an optional long-lived task on an env branch, used to run
-  a deployment environment: `tasks/main/` for production, `tasks/dev/` for
-  the development server. Never pruned.
 - **Env branch** — a branch listed in `ENV_BRANCHES`. Without that key,
   each repository's default branch plus `main`, `master`, `dev`,
-  `develop`, `staging` and `production`.
+  `develop`, `staging` and `production`. `task-create` refuses one; check
+  it out with `branch-add`. Its local branch is never deleted.
 - **Landed** — a repository's branch whose work has reached the default
   branch: its PR is merged, it is merged into the default branch, or its
   remote branch is gone. A task has landed when every repository has.
@@ -197,10 +204,10 @@ other env branches in `workspace.conf` as `ENV_BRANCHES="main dev staging"`.
 - **Task folder name** — the branch name with every slash turned into a
   hyphen, such as `feat-login`.
 - **Workspace** — the directory created by the Quick Start command. It
-  holds the scripts, the bare clones, the tasks and the archive. It is not
-  a git repository.
+  holds the scripts, the bare clones, the tasks, the branch checkouts and
+  the archive. It is not a git repository.
 - **`workspace.conf`** — optional settings, a bash file the scripts
   source. Today it has one key, `ENV_BRANCHES`.
 - **Worktree** — a git worktree: a working directory for one branch of one
-  repository, at `tasks/<task>/<repo>`. Disposable; anything that must
-  survive it is written elsewhere.
+  repository, at `tasks/<task>/<repo>` or `branches/<name>/<repo>`.
+  Disposable; anything that must survive it is written elsewhere.

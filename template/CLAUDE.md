@@ -1,8 +1,8 @@
 # Workspace
 
 This directory is scaffolding, not a git repository. The code lives in bare
-clones under `repos/<name>.git` and in the worktrees under `tasks/`. See
-README.md for the layout and the scripts.
+clones under `repos/<name>.git` and in the worktrees under `tasks/` and
+`branches/`. See README.md for the layout and the scripts.
 
 ## Three CLAUDE.md files
 
@@ -33,6 +33,7 @@ must outlive the branch is written somewhere else.
 | Plan links | `tasks/<task>/.claude/plans/` | the task's session | copied as real files into `archive/<task>/` |
 | Cross-task notes, specs, plans | `docs/`, `.claude/plans/` | every session | stays |
 | Ignored local files, such as `.env` | `shared/<repo>/` | every new worktree of `<repo>` | stays |
+| A branch to run or review, such as `main` | `branches/<name>/`, via `scripts/branch-add` | that checkout only | `scripts/branch-remove` deletes it |
 | Branch setup: database, dependencies | `.workflow/` in the repository, committed | every worktree, via `post-create` | `pre-retire` tears it down |
 | Code | the worktree, committed | the branch | the branch lives on origin |
 
@@ -71,15 +72,20 @@ A task is one branch name across every repository it touches.
 `scripts/task-list` shows every task, its repositories, and how far each
 one has landed.
 
-## Env tasks (optional)
+## Branch checkouts (optional)
 
-Env tasks are long-lived checkouts for running a deployment environment
-locally:
+`branches/` holds long-lived checkouts of branches you run or review, not
+work on. It is created by the first `scripts/branch-add`:
 
-- `tasks/main/` mirrors production.
-- `tasks/dev/` mirrors the development server.
+- `branches/main/` mirrors production.
+- `branches/dev/` mirrors the development server.
+- `branches/feat-x/` is a teammate's branch, checked out to try it.
 
-Create one with `scripts/task-create main <repo>...`. `task-prune` never
-retires an env task, `task-retire` refuses one without `--force`, and
-`sync-repos` fast-forwards its clean worktrees. Do feature work in a
-feature task, never in an env task.
+Create one with `scripts/branch-add <branch> <repo>...`; the branch must
+already exist. `scripts/sync-repos` fast-forwards clean checkouts, and
+`scripts/branch-remove` removes one. `task-create` refuses env branches
+such as `main` and points here.
+
+A checkout is not a task. It has no `NOTES.md`, no plans and no archive.
+Never do feature work or write notes there: start a task with
+`scripts/task-create` instead.
