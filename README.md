@@ -1,8 +1,10 @@
 # Worktree Workspace
 
-A workspace scaffold for multi-repository development with git worktree and
-AI agents. One main clone per repository, one worktree per branch, and a
-scratch area that outlives both.
+A workspace scaffold for multi-repository development with git worktrees and
+AI agents. Each repository is a bare clone. Each task is one folder holding
+a worktree of every repository it touches, all on one branch, plus the
+task's notes and plans. One agent session, started in the task folder, sees
+all of it.
 
 ## Quick Start
 
@@ -16,21 +18,37 @@ bunx gitpick acfatah/worktree-workspace/tree/main/template .
 If the copy did not preserve executable bits, run `chmod +x scripts/*` once.
 The scripts need bash 3.2 and git 2.23 or newer; `gh` is optional.
 
-
 ## Directory Structure
 
-After running the Quick Start command, the workspace looks like this:
+After running the Quick Start command and adding two repositories, the
+workspace looks like this:
 
 ```
-project-root/
-├── CLAUDE.md         # Placement rules for the worktree workflow.
-├── README.md         # Workspace guide and the full script reference.
-├── docs/             # Documentation for this workspace.
-├── repos/            # Main clone of each repository.
-├── scratch/          # Working notes and temporary files.
-├── scripts/          # Worktree lifecycle, repo sync, and status.
-├── skills-lock.json  # Pinned agent skills.
-└── worktrees/        # One worktree per branch, per repo.
+project-root/               # a plain folder, not a git repository
+├── CLAUDE.md               # Placement rules for the task workflow.
+├── README.md               # Workspace guide and the full script reference.
+├── .claude/plans/          # Cross-task plan links.
+├── archive/                # Notes and plans of retired tasks.
+├── docs/                   # Cross-task notes, specs and diagrams.
+├── repos/
+│   ├── client.git/         # Bare clone.
+│   └── server.git/         # Bare clone.
+├── scripts/                # Task lifecycle, repo sync, and status.
+├── shared/<repo>/          # Ignored local files (.env) for new worktrees.
+├── tasks/
+│   ├── main/               # Optional env task: production.
+│   │   ├── client/
+│   │   └── server/
+│   ├── dev/                # Optional env task: development server.
+│   │   ├── client/
+│   │   └── server/
+│   └── feat-login/         # A task, on branch feat/login.
+│       ├── CLAUDE.md       # Generated: the branch, where notes go.
+│       ├── NOTES.md        # Generated stub.
+│       ├── .claude/plans/  # This task's plan links.
+│       ├── client/         # Worktree.
+│       └── server/         # Worktree.
+└── workspace.conf          # Optional; created when you need it.
 ```
 
 In this repository the same tree lives under `template/`, which is what
@@ -39,35 +57,34 @@ its options, and the per-repository hooks; this page is the tour.
 
 ## Workflow Steps
 
-### 0. Add a Repository
+### 0. Add the Repositories
 
-- Run: `scripts/repo-add <url>`
-- Clones into `repos/<name>`, pins its default branch, and creates
-  `worktrees/<name>/`.
-- Then configure agent skills from inside `repos/<name>`, as step 3 explains.
+- Run: `scripts/repo-add <url>`, once per repository.
+- It makes a bare clone at `repos/<name>.git` and pins its default branch.
+- Put ignored local files that every worktree needs, such as `.env`, in
+  `shared/<name>/`.
 
-### 1. Create a Worktree
+### 1. Create a Task
 
-- Run: `scripts/worktree-create <repo> <scope/branch-name>`
-- Purpose: Isolate development in a dedicated directory under
-  `worktrees/<repo>/<scope-branch-name>`.
-- Benefit: Keeps the main repo clean while allowing parallel feature or
-  bugfix development.
-- It also copies ignored local files such as `.env`, links `.scratch` to the
-  workspace scratch area, and runs the repository's `post-create` hook.
-- It prints the path, so `cd "$(scripts/worktree-create app feat/login)"`
-  puts you straight into the new worktree.
+- Run: `scripts/task-create <branch> <repo>...`, for example
+  `scripts/task-create feat/login client server`.
+- It creates `tasks/feat-login/` with a worktree of each repository on
+  `feat/login`, plus `CLAUDE.md`, `NOTES.md` and `.claude/plans/`.
+- It prints the path, so `cd "$(scripts/task-create feat/login client)"`
+  puts you straight into the task.
+- Need another repository later? `scripts/task-add feat-login server`.
 
-### 2. Prepare the Database (Optional)
+### 2. Prepare Branch Resources (Optional)
 
-Put this in `repos/<repo>/.workflow/post-create` and commit it, so every
-worktree of that repository gets the same treatment and teammates inherit it.
-The hook runs inside the new worktree with the branch details in the
-environment; `${WORKFLOW_REPO}_${WORKFLOW_SLUG}` is the conventional name for
-a branch database.
+Put this in `.workflow/post-create` in the repository and commit it, so
+every worktree of that repository gets the same treatment and teammates
+inherit it. The hook runs inside the new worktree, after the `shared/`
+files are copied, with the task and branch details in the environment.
+`${WORKFLOW_REPO}_${WORKFLOW_SLUG}` is the conventional name for a branch
+database.
 
 ```bash
-# repos/app/.workflow/post-create
+# .workflow/post-create
 db="${WORKFLOW_REPO}_${WORKFLOW_SLUG}"
 createdb "$db" 2>/dev/null || true
 pg_dump --no-owner "${WORKFLOW_REPO}_dev" | psql --quiet "$db"
@@ -75,130 +92,115 @@ printf 'DATABASE_URL=postgres://localhost/%s\n' "$db" >> .env
 ```
 
 A branch-specific database keeps schema migrations from breaking other
-branches. Tear it down in `pre-retire`, which step 7 runs. The workspace
-README has the full hook contract.
+branches. Tear it down in `.workflow/pre-retire`, which step 6 runs. The
+workspace README has the full hook contract.
 
-### 3. Plan Development with AI/Agent
+### 3. Plan in the Task Folder
 
-Install the planning skill:
+Start your agent in `tasks/<task>/`. One session then sees every
+repository of the task.
 
-```bash
-npx skills add mattpocock/skills@setup-matt-pocock-skills
-```
+Keep the task's working material in the task folder: notes in `NOTES.md`,
+plan links in `.claude/plans/`. It sits above the worktrees, so it
+survives them, and step 6 archives it. Notes that span tasks go in
+`docs/`. Commit the plans that stabilise into the repository, as
+documentation or an ADR. `CLAUDE.md` has the full placement table.
 
-Then run `setup-matt-pocock-skills` **from inside `repos/<repo>`**, once per
-repository, to configure its issue tracker, triage label vocabulary, and
-domain doc layout. It writes to the repository, so every worktree and every
-pull request inherits the result. Running it at the workspace root instead
-leaves the configuration where no worktree can read it.
+Keep one task per unit of work.
 
-Installed skills are pinned in `skills-lock.json`. To restore them in a fresh
-checkout, run `npx skills experimental_install` — the command is still marked
-experimental upstream.
+### 4. Develop and Commit
 
-Use an AI assistant or planning agent to outline tasks, generate scaffolding,
-suggest migration strategies, and track dependencies and risks.
-
-Plans do not live in the worktree, because step 7 deletes it. Put them in
-`scratch/active/<feature>/` while they are in flux, and commit the ones that
-stabilise into the repository as documentation or an ADR. `CLAUDE.md` has the
-full placement table and the session-by-session flow.
-
-### 4. Develop in the Worktree
-
-- Navigate to: `worktrees/<repo>/<scope-branch-name>`
-- Implement changes, run tests, and validate against the local or temporary
-  database.
-- Keep commits atomic and descriptive for easier review.
-
-### 5. Commit Changes
-
-- Follow conventional commit messages (e.g., feat:, fix:, chore:).
-- Ensure commits are scoped to the branch purpose.
+- Work in `tasks/<task>/<repo>`, one worktree per repository.
+- Keep commits atomic, scoped to the task, with conventional messages
+  (`feat:`, `fix:`, `chore:`).
 - Run pre-commit hooks or linting checks if configured.
 
-### 6. Create a Pull Request (PR)
+### 5. Open the Pull Requests
 
-- Push the branch to remote.
-- Open a PR with:
-  - Clear description of changes.
-  - Migration notes if applicable.
-  - Links to AI-generated plans or docs.
-- Request review from peers or automated agents.
+- Push the branch in each repository: `git push -u origin <branch>`.
+- Open one PR per repository, all from the same branch name, with a clear
+  description, migration notes if any, and links to the related PRs.
 
-### 7. Retire the Worktree
+### 6. Retire the Task
 
-After PR merge or branch closure:
-- Run `scripts/worktree-retire` from inside the worktree, or
-  `scripts/worktree-retire <repo> <branch>` from anywhere.
-- It runs the repository's `pre-retire` hook, which is where temporary
-  databases get dropped, removes the worktree and the local branch, and moves
-  the feature's notes from `scratch/active/` to `scratch/archive/`.
-- It refuses to run on a dirty worktree or one holding unpushed commits.
-- Run `scripts/sync-repos` to bring every `repos/<repo>` up to date.
+After the PRs merge or close:
 
-### 8. Housekeeping
+- Run `scripts/task-retire` from inside the task, or
+  `scripts/task-retire <task>` from anywhere.
+- It refuses if any worktree is dirty or holds commits that are on no
+  origin branch.
+- It runs every `pre-retire` hook, removes the worktrees and their local
+  branches, and moves the task folder to `archive/<task>/`. Plan links
+  become real files on the way.
 
-- `scripts/worktree-list` shows every worktree across every repository, with
-  its branch, whether it is dirty, how far ahead or behind it is, and its pull
-  request state. This is how you see which tickets are still open and which
-  frontier is free.
-- `scripts/worktree-prune` finds everything whose work has landed and retires
-  it in one pass. It is a dry run until you pass `--yes`.
-- `scripts/sync-repos` fast-forwards every main clone and never rewrites one.
+### 7. Housekeeping
 
+- `scripts/task-list` shows every task and, per repository, whether it is
+  dirty, how far ahead or behind it is, its PR state, and whether it has
+  landed. A task where only some repositories landed shows `landed 1/2`.
+- `scripts/task-prune` retires every task whose repositories have all
+  landed. It is a dry run until you pass `--yes`.
+- `scripts/sync-repos` fetches every repository and fast-forwards the env
+  tasks.
 
-## `scratch/` directory
+### Env Tasks (Optional)
 
-Working notes. Nothing here is authoritative, current, or reviewed.
-Files change frequently and may contradict the code.
+To run a deployment environment locally, keep a long-lived task on its
+branch:
 
-- inbox/  — unsorted; triage into active/ or delete
-- active/ — being worked on now
-- parked/ — paused, still relevant
-- archive/— done or abandoned; kept for the reasoning, not the answer
+- `scripts/task-create main client server` mirrors **production**.
+- `scripts/task-create dev client server` mirrors the **development
+  server**.
 
-Anything that stabilizes moves to docs/ or becomes an ADR.
+`task-prune` never retires them, `task-retire` refuses them without
+`--force`, and `sync-repos` keeps their clean worktrees fast-forwarded. List
+other env branches in `workspace.conf` as `ENV_BRANCHES="main dev staging"`.
 
 ## Glossary
 
-- **Base branch** — the branch a new worktree starts from. Defaults to the
-  repository's default branch, pinned by `repo-add`; override with
-  `worktree-create --base`.
-- **Feature** — the scratch name of a branch: its slug. Notes for
-  `feat/login` live in `scratch/active/login/`, so `plan/login` and
-  `feat/login` share one folder.
-- **Frontier** — the tickets whose blockers are all done, so each can take
-  its own worktree in parallel. `scripts/worktree-list` is the view of it.
-- **Landed** — a branch whose work has reached the base branch: its pull
-  request is merged, it is merged into the base, or its remote branch is
-  gone. `worktree-prune` retires only landed branches.
-- **Lifecycle hook** — an executable script in `repos/<repo>/.workflow/`,
-  committed to the repository. `post-create` runs after a worktree is made;
-  `pre-retire` runs before it is removed and can abort the retirement.
-- **Main clone** — the one full clone of a repository, at `repos/<repo>`.
-  Every worktree of that repository hangs off it, and `sync-repos` keeps it
-  up to date.
-- **Plan link** — a symlink to an agent's plan-mode file, kept under
-  `.scratch/<feature>/plans/` so it outlives the worktree.
-- **Retire** — remove a worktree for good: run `pre-retire`, delete the
-  worktree and its local branch, and archive its scratch notes. Done by
-  `scripts/worktree-retire`.
+- **Archive** — `archive/<task>/`, where `task-retire` moves what is left
+  of a task folder: notes, and plans as real files.
+- **Bare clone** — the one clone of a repository, at `repos/<name>.git`,
+  with no working files of its own. Every worktree hangs off it, and
+  `sync-repos` keeps its `origin/*` refs current.
+- **Base branch** — the branch a new task branch starts from. Defaults to
+  the repository's default branch, pinned by `repo-add`; override with
+  `repo-add --branch` or `task-create --base`.
+- **Env task** — an optional long-lived task on an env branch, used to run
+  a deployment environment: `tasks/main/` for production, `tasks/dev/` for
+  the development server. Never pruned.
+- **Env branch** — a branch listed in `ENV_BRANCHES`. Without that key,
+  each repository's default branch plus `main`, `master`, `dev`,
+  `develop`, `staging` and `production`.
+- **Landed** — a repository's branch whose work has reached the default
+  branch: its PR is merged, it is merged into the default branch, or its
+  remote branch is gone. A task has landed when every repository has.
+- **Lifecycle hook** — an executable script in `.workflow/`, committed to
+  the repository. `post-create` runs after a worktree is made;
+  `pre-retire` runs before a task's worktrees are removed and can abort
+  the retire.
+- **Plan link** — a symlink to an agent's plan-mode file, kept in
+  `tasks/<task>/.claude/plans/` so it outlives the worktrees.
+- **Prune verdict** — what `task-prune` decides for a task: `retire`,
+  `partial`, `review`, `skip`, `env` or `keep`.
+- **Retire** — finish a task for good: run `pre-retire`, delete its
+  worktrees and local branches, and archive its folder. Done by
+  `scripts/task-retire`.
 - **Scope** — the part of a branch name before the first slash, such as
   `feat` in `feat/login`. Empty when the branch has no slash.
-- **Scratch area** — `scratch/` at the workspace root, for notes that must
-  outlive any single worktree. Each worktree reaches it through a
-  `.scratch` symlink to `scratch/active`.
+- **Shared files** — ignored local files in `shared/<repo>/`, copied into
+  every new worktree of that repository.
 - **Slug** — the branch name with its scope stripped and any remaining
   slashes turned into hyphens, such as `login` in `feat/login`.
-- **Ticket** — one unit of work in the issue tracker, sized to a single
-  fresh context window. One ticket gets one worktree.
+- **Task** — one unit of work: one branch name across every repository it
+  touches, in one folder under `tasks/`.
+- **Task folder name** — the branch name with every slash turned into a
+  hyphen, such as `feat-login`.
 - **Workspace** — the directory created by the Quick Start command. It
-  holds the scripts, every main clone, every worktree, and the scratch
-  area.
-- **Worktree** — a git worktree: a second working directory for one branch,
-  at `worktrees/<repo>/<dirname>`. Disposable; anything that must survive
-  it is written elsewhere.
-- **Worktree directory name** — the branch name with every slash turned
-  into a hyphen, such as `feat-login`. Exposed to hooks as
-  `WORKFLOW_WORKTREE_NAME`.
+  holds the scripts, the bare clones, the tasks and the archive. It is not
+  a git repository.
+- **`workspace.conf`** — optional settings, a bash file the scripts
+  source. Today it has one key, `ENV_BRANCHES`.
+- **Worktree** — a git worktree: a working directory for one branch of one
+  repository, at `tasks/<task>/<repo>`. Disposable; anything that must
+  survive it is written elsewhere.

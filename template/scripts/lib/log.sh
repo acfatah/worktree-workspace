@@ -4,7 +4,7 @@
 # Logging helpers layered on colors.sh.
 #
 # Everything here writes to stderr. stdout is reserved for payload, so that
-# `cd "$(scripts/worktree-create app feat/login)"` works and --porcelain output
+# `cd "$(scripts/task-create feat/login app)"` works and --porcelain output
 # stays pipeable.
 #
 # Source this at a script's top level, never inside a function: colors.sh reads
