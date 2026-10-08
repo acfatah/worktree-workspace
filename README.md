@@ -83,16 +83,26 @@ files are copied, with the task and branch details in the environment.
 database.
 
 ```bash
+#!/usr/bin/env bash
 # .workflow/post-create
-db="${WORKFLOW_REPO}_${WORKFLOW_SLUG}"
-createdb "$db" 2>/dev/null || true
-pg_dump --no-owner "${WORKFLOW_REPO}_dev" | psql --quiet "$db"
-printf 'DATABASE_URL=postgres://localhost/%s\n' "$db" >> .env
+set -euo pipefail
+
+if [ "$WORKFLOW_KIND" = task ]; then   # branch checkouts keep shared values
+  db="${WORKFLOW_REPO}_${WORKFLOW_SLUG}"
+  createdb "$db" 2>/dev/null || true
+  pg_dump --no-owner "${WORKFLOW_REPO}_dev" | psql --quiet "$db"
+  grep -v '^DATABASE_URL=' .env > .env.tmp 2>/dev/null || true
+  printf 'DATABASE_URL=postgres://localhost/%s\n' "$db" >> .env.tmp
+  mv .env.tmp .env
+fi
 ```
 
-A branch-specific database keeps schema migrations from breaking other
-branches. Tear it down in `.workflow/pre-retire`, which step 6 runs. The
-workspace README has the full hook contract.
+Every worktree gets its own copy of `shared/<repo>/.env`, so the hook
+rewrites `DATABASE_URL` for this task only; the scripts never edit `.env`
+themselves. A branch-specific database keeps schema migrations from
+breaking other branches. Tear it down in `.workflow/pre-retire`, which
+step 6 runs. The workspace README has the full hook contract and the
+matching `pre-retire`.
 
 ### 3. Plan in the Task Folder
 

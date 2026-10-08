@@ -412,29 +412,60 @@ exists but is not executable produces a warning, never a silent skip.
 | `WORKFLOW_BASE_BRANCH` | `main`, on `post-create` only |
 | `WORKFLOW_FORCE` | `0` or `1`, on `pre-retire` only |
 
+### Per-branch values in `.env`
+
+The scripts never edit `.env`. Each new worktree gets its own copy of
+`shared/<repo>/.env`, unchanged, and `post-create` then makes that copy
+branch-specific. Because it is a copy, the change reaches no other task.
+
+1. **`task-create feat/login app`** copies `shared/app/.env`, which might
+   say `DATABASE_URL=postgres://localhost/app_dev`, into
+   `tasks/feat-login/app/.env`.
+2. **`post-create`** creates `app_login`, fills it from `app_dev`, and
+   rewrites `DATABASE_URL` in that copy to point at it.
+3. **`task-retire`** runs `pre-retire`, which drops `app_login`, then
+   deletes the worktree and its `.env`.
+
 A branch database is conventionally `${WORKFLOW_REPO}_${WORKFLOW_SLUG}`.
 
 ```bash
-# .workflow/post-create, committed in the app repository
 #!/usr/bin/env bash
+# .workflow/post-create, committed in the app repository
 set -euo pipefail
 
-db="${WORKFLOW_REPO}_${WORKFLOW_SLUG}"
-createdb "$db" 2>/dev/null || true
-pg_dump --no-owner "${WORKFLOW_REPO}_dev" | psql --quiet "$db"
-printf 'DATABASE_URL=postgres://localhost/%s\n' "$db" >> .env
+# Tasks get their own database. A branch checkout, such as branches/main,
+# keeps the shared values: its slug would make it app_main otherwise.
+if [ "$WORKFLOW_KIND" = task ]; then
+  db="${WORKFLOW_REPO}_${WORKFLOW_SLUG}"
+  createdb "$db" 2>/dev/null || true
+  pg_dump --no-owner "${WORKFLOW_REPO}_dev" | psql --quiet "$db"
+
+  # Replace the shared line; a second DATABASE_URL would leave the winner
+  # up to whichever loader reads the file.
+  grep -v '^DATABASE_URL=' .env > .env.tmp 2>/dev/null || true
+  printf 'DATABASE_URL=postgres://localhost/%s\n' "$db" >> .env.tmp
+  mv .env.tmp .env
+fi
+
 bun install
 ```
 
 ```bash
-# .workflow/pre-retire, committed in the app repository
 #!/usr/bin/env bash
+# .workflow/pre-retire, committed in the app repository
 set -euo pipefail
 
-dropdb --if-exists "${WORKFLOW_REPO}_${WORKFLOW_SLUG}"
+# Only tasks got a database from post-create.
+if [ "$WORKFLOW_KIND" = task ]; then
+  dropdb --if-exists "${WORKFLOW_REPO}_${WORKFLOW_SLUG}"
+fi
 ```
 
-Make both executable before committing: `chmod +x .workflow/*`.
+Make both executable before committing: `chmod +x .workflow/*`. The
+`#!` line must come first, before any comment.
+
+`post-create` runs only for a new worktree. Changing `shared/<repo>/.env`
+later does not reach existing tasks; edit their copies, or recreate them.
 
 ## Task notes
 
