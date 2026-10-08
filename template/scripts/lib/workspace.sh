@@ -32,6 +32,10 @@ export WORKSPACE_ROOT
 # Configuration
 # ------------------------------------------------------------------------------
 
+# Env branches when workspace.conf sets none: these names, plus each repo's
+# default branch.
+WS_DEFAULT_ENV_BRANCHES="main master dev develop staging production"
+
 # ws_load_conf - source workspace.conf, if present. It is optional and created
 # on demand; every key has a default here.
 ws_load_conf() {
@@ -39,7 +43,8 @@ ws_load_conf() {
     # shellcheck source=/dev/null
     . "$WORKSPACE_CONF"
   fi
-  # Space-separated env branches. Empty means "each repo's default branch".
+  # Space-separated env branches. Setting it replaces the built-in list and
+  # the default branch alike.
   ENV_BRANCHES=${ENV_BRANCHES:-}
 }
 
@@ -230,16 +235,17 @@ ws_default_branch() {
 }
 
 # ws_is_env_branch BRANCH REPO_DIR - is BRANCH a long-lived env branch (main,
-# dev, ...)? ENV_BRANCHES from workspace.conf decides; without it, only the
-# repo's default branch is one.
+# dev, ...)? ENV_BRANCHES from workspace.conf decides. Without it, the
+# built-in list and the repo's default branch are: a dev branch that has just
+# caught up with main must never look landed and be pruned.
 ws_is_env_branch() {
   local branch=$1 dir=$2 b
+  for b in ${ENV_BRANCHES:-$WS_DEFAULT_ENV_BRANCHES}; do
+    if [ "$b" = "$branch" ]; then
+      return 0
+    fi
+  done
   if [ -n "$ENV_BRANCHES" ]; then
-    for b in $ENV_BRANCHES; do
-      if [ "$b" = "$branch" ]; then
-        return 0
-      fi
-    done
     return 1
   fi
   b=$(ws_default_branch "$dir" 2>/dev/null) || return 1

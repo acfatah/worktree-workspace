@@ -202,11 +202,15 @@ check "without workspace.conf the default branch is an env branch" \
   "$( lib ws_is_env_branch main "$APP"; echo $? )"
 
 check "without workspace.conf other branches are not env branches" \
-  "$( ! lib ws_is_env_branch dev "$APP"; echo $? )"
+  "$( ! lib ws_is_env_branch feat/x "$APP"; echo $? )"
+
+check "without workspace.conf the built-in list makes dev an env branch" \
+  "$( lib ws_is_env_branch dev "$APP" && lib ws_is_env_branch staging "$APP"; echo $? )"
 
 printf 'ENV_BRANCHES="main dev"\n' > "$WS/workspace.conf"
 check "ENV_BRANCHES in workspace.conf adds env branches" \
-  "$( lib ws_is_env_branch dev "$APP" && ! lib ws_is_env_branch feat/x "$APP"; echo $? )"
+  "$( lib ws_is_env_branch dev "$APP" && ! lib ws_is_env_branch feat/x "$APP" \
+      && ! lib ws_is_env_branch staging "$APP"; echo $? )"
 rm -f "$WS/workspace.conf"
 
 # ------------------------------------------------------------------------------
@@ -561,6 +565,123 @@ rc=$?
 check "task-retire --force retires an env task and keeps its branch" \
   "$( [ "$rc" = 0 ] && [ ! -e "$WS/tasks/main" ] \
       && git -C "$APP" show-ref --verify --quiet refs/heads/main; echo $? )" "rc=$rc"
+
+# ------------------------------------------------------------------------------
+# task-prune
+# ------------------------------------------------------------------------------
+
+# push_task TASK REPO... - commit and push the task's branch in each repo.
+push_task() {
+  local task=$1 r
+  shift
+  for r in "$@"; do
+    ( cd "$WS/tasks/$task/$r" && git commit -q --allow-empty -m "$task $r" \
+        && git push -q -u origin "$(git symbolic-ref --short HEAD)" )
+  done
+}
+
+# merge_on_origin SEED BRANCH TARGET - merge BRANCH into TARGET on origin.
+merge_on_origin() {
+  ( cd "$TEST_ROOT/$1" && git fetch -q origin "$2" && git merge -q --no-ff --no-edit FETCH_HEAD \
+      && git push -q origin "$3" )
+}
+
+wt task-create feat/pdone app legacy >/dev/null 2>&1
+wt task-create feat/ppart app legacy >/dev/null 2>&1
+wt task-create feat/pfresh app >/dev/null 2>&1
+wt task-create feat/pdirty app >/dev/null 2>&1
+push_task feat-pdone app legacy
+push_task feat-ppart app legacy
+push_task feat-pdirty app
+merge_on_origin seed-app feat/pdone main
+merge_on_origin seed-legacy feat/pdone master
+merge_on_origin seed-app feat/ppart main
+merge_on_origin seed-app feat/pdirty main
+touch "$WS/tasks/feat-pdirty/app/stray"
+
+PRUNE_SET="feat-pdone feat-ppart feat-pfresh feat-pdirty feat-gone dev"
+# shellcheck disable=SC2086
+out=$(wt task-prune $PRUNE_SET 2>&1)
+rc=$?
+verdict() { printf '%s\n' "$out" | awk -v t="$1" '$1 == t { print $2; exit }'; }
+
+check "task-prune lists a fully landed task as retire" \
+  "$( [ "$rc" = 0 ] && [ "$(verdict feat-pdone)" = retire ]; echo $? )" "rc=$rc" "$out"
+check "task-prune dry run changes nothing" "$( [ -e "$WS/tasks/feat-pdone/app/.git" ]; echo $? )"
+check "task-prune keeps a partial landing" "$( [ "$(verdict feat-ppart)" = partial ]; echo $? )" "$out"
+check "task-prune keeps a fresh task" "$( [ "$(verdict feat-pfresh)" = keep ]; echo $? )" "$out"
+check "task-prune skips an env task, dev included without workspace.conf" \
+  "$( [ "$(verdict dev)" = env ]; echo $? )" "$out"
+check "task-prune skips a landed task with a dirty worktree" \
+  "$( [ "$(verdict feat-pdirty)" = skip ]; echo $? )" "$out"
+check "task-prune sends landed work with unpushed commits to review" \
+  "$( [ "$(verdict feat-gone)" = review ]; echo $? )" "$out"
+
+# shellcheck disable=SC2086
+out=$(wt task-prune --yes $PRUNE_SET 2>/dev/null)
+rc=$?
+kept=0
+for t in feat-ppart feat-pfresh feat-pdirty feat-gone dev; do
+  [ -d "$WS/tasks/$t" ] || kept=1
+done
+check "task-prune --yes retires only the landed task" \
+  "$( [ "$rc" = 0 ] && [ "$out" = "$WS/archive/feat-pdone" ] && [ ! -e "$WS/tasks/feat-pdone" ] \
+      && [ "$kept" = 0 ]; echo $? )" "rc=$rc out=$out kept=$kept"
+rm -f "$WS/tasks/feat-pdirty/app/stray"
+
+wt task-prune nosuch >/dev/null 2>&1
+check "task-prune refuses an unknown task with exit 3" "$( [ $? = 3 ]; echo $? )"
+
+# ------------------------------------------------------------------------------
+# sync-repos: env-task fast-forward
+# ------------------------------------------------------------------------------
+
+# push_main - a new commit on origin main; prints its id.
+push_main() {
+  ( cd "$TEST_ROOT/seed-app" && git commit -q --allow-empty -m "${1:-upstream}" \
+      && git push -q origin main && git rev-parse HEAD )
+}
+
+wt task-create main app >/dev/null 2>&1
+E=$WS/tasks/main/app
+FR=$WS/tasks/feat-remote/app
+fr_before=$(git -C "$FR" rev-parse HEAD)
+( cd "$TEST_ROOT/seed-app" && git switch -q feat/remote && git commit -q --allow-empty -m more \
+    && git push -q origin feat/remote && git switch -q main )
+
+want=$(push_main)
+wt sync-repos >/dev/null 2>&1
+rc=$?
+check "sync-repos fast-forwards a clean env-task worktree" \
+  "$( [ "$rc" = 0 ] && [ "$(git -C "$E" rev-parse HEAD)" = "$want" ]; echo $? )" \
+  "rc=$rc want=$want got=$(git -C "$E" rev-parse HEAD)"
+check "sync-repos leaves a feature task alone" \
+  "$( [ "$(git -C "$FR" rev-parse HEAD)" = "$fr_before" ]; echo $? )"
+
+before=$(git -C "$E" rev-parse HEAD)
+push_main >/dev/null
+wt sync-repos --no-ff >/dev/null 2>&1
+check "sync-repos --no-ff fetches but does not fast-forward" \
+  "$( [ "$(git -C "$E" rev-parse HEAD)" = "$before" ] \
+      && [ "$(git -C "$APP" rev-parse origin/main)" != "$before" ]; echo $? )"
+
+touch "$E/stray"
+wt sync-repos >/dev/null 2>"$TEST_ROOT/sync.err"
+rc=$?
+check "sync-repos skips a dirty env worktree and still exits 0" \
+  "$( [ "$rc" = 0 ] && [ "$(git -C "$E" rev-parse HEAD)" = "$before" ] \
+      && grep -q 'uncommitted changes' "$TEST_ROOT/sync.err"; echo $? )" "rc=$rc" "$(cat "$TEST_ROOT/sync.err")"
+rm -f "$E/stray"
+
+git -C "$E" commit -q --allow-empty -m local
+before=$(git -C "$E" rev-parse HEAD)
+push_main >/dev/null
+wt sync-repos >/dev/null 2>"$TEST_ROOT/sync.err"
+rc=$?
+check "sync-repos skips a diverged env worktree with a warning" \
+  "$( [ "$rc" = 0 ] && [ "$(git -C "$E" rev-parse HEAD)" = "$before" ] \
+      && grep -q 'diverged' "$TEST_ROOT/sync.err"; echo $? )" "rc=$rc" "$(cat "$TEST_ROOT/sync.err")"
+git -C "$E" reset -q --hard origin/main
 
 # ------------------------------------------------------------------------------
 # Lint

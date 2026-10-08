@@ -1,0 +1,246 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+_self=${BASH_SOURCE[0]}
+while [ -L "$_self" ]; do
+  _dir=$(cd -P "$(dirname -- "$_self")" && pwd)
+  _self=$(readlink -- "$_self")
+  case $_self in
+    /*) ;;
+    *)  _self=$_dir/$_self ;;
+  esac
+done
+SCRIPT_DIR=$(cd -P "$(dirname -- "$_self")" && pwd)
+
+# shellcheck source=./lib/workspace.sh
+. "$SCRIPT_DIR/lib/workspace.sh"
+
+USAGE='Usage: task-prune [options] [<task>...]
+
+      --yes        retire the candidates (default: dry run)
+      --no-fetch   do not fetch; landing and [gone] may be stale
+      --force      pass --force through to task-retire
+  -h, --help       show this help
+
+Finds tasks whose every repository has landed (pull request merged, branch
+merged into the default branch, or remote branch deleted) and hands each to
+task-retire. Without --yes it changes nothing but git'"'"'s fetch and stale
+worktree records.
+
+Verdicts:
+  retire    every repository landed; retired with --yes
+  partial   some repositories landed; kept
+  review    landed, but commits are on no origin ref (a squash merge, or
+            work after it); never retired here, use task-retire --force
+  skip      landed, but a worktree is dirty, locked or missing
+  env       an env task; never pruned
+  keep      nothing landed yet, or no worktrees'
+
+do_it=0
+fetch=1
+force=0
+tasks=
+
+while [ $# -gt 0 ]; do
+  case $1 in
+    --yes|-y)   do_it=1 ;;
+    --no-fetch) fetch=0 ;;
+    --force)    force=1 ;;
+    -h|--help)  printf '%s\n' "$USAGE"; exit 0 ;;
+    --)         shift; break ;;
+    -*)         usage_die "unknown option: $1" ;;
+    *)          tasks=$tasks$1$'\n' ;;
+  esac
+  shift
+done
+
+while [ $# -gt 0 ]; do
+  tasks=$tasks$1$'\n'
+  shift
+done
+
+ws_require_workspace
+
+if [ -n "$tasks" ]; then
+  while IFS= read -r task; do
+    [ -n "$task" ] || continue
+    if [ ! -d "$(ws_task_dir "$task")" ]; then
+      die 3 "no such task: tasks/$task"
+    fi
+  done <<EOT
+$tasks
+EOT
+else
+  tasks=$(ws_list_tasks)
+fi
+
+if [ -z "$tasks" ]; then
+  log_info "no tasks to consider"
+  exit 0
+fi
+
+# Fetch and clear stale records once per repository, before judging anything.
+declare -A pr_cache=()
+while IFS= read -r repo; do
+  [ -n "$repo" ] || continue
+  dir=$REPOS_DIR/$repo.git
+  git -C "$dir" worktree prune
+  if [ "$fetch" = 1 ] && git -C "$dir" remote get-url origin >/dev/null 2>&1; then
+    git -C "$dir" fetch --prune --quiet origin || \
+      log_warn "$repo: fetch failed; landing may be judged against stale refs"
+  fi
+  pr_cache[$repo]=$(ws_pr_table "$dir")
+done <<EOT
+$(ws_list_repos)
+EOT
+
+# Rows: task, verdict, landed count, total, reason.
+rows=
+n_retire=0
+n_partial=0
+n_review=0
+n_skip=0
+n_env=0
+n_keep=0
+
+while IFS= read -r task; do
+  [ -n "$task" ] || continue
+  records=$(ws_task_worktrees "$task")
+
+  verdict=keep
+  total=0
+  landed_n=0
+  is_env=0
+  note=
+  note_kind=
+  evidence=
+
+  while IFS=$'\t' read -r repo p b f; do
+    [ -n "$repo" ] || continue
+    dir=$REPOS_DIR/$repo.git
+    total=$((total + 1))
+    if [ -z "$b" ]; then
+      continue
+    fi
+    if ws_is_env_branch "$b" "$dir"; then
+      is_env=1
+      continue
+    fi
+
+    pr_state=
+    if [ -n "${pr_cache[$repo]}" ]; then
+      pr_state=$(printf '%s\n' "${pr_cache[$repo]}" | awk -F'\t' -v n="$b" '$1 == n { print $3; exit }')
+    fi
+    v=$(ws_landed "$dir" "$b" "$pr_state")
+    case ${v%%$'\t'*} in
+      merged|gone) ;;
+      *) continue ;;
+    esac
+    landed_n=$((landed_n + 1))
+    evidence="$repo: ${v#*$'\t'}"
+
+    # A landed repository can still hold work the merge did not take.
+    if [ -z "$note" ]; then
+      case $f in
+        *locked*) note="$repo: locked"; note_kind=skip ;;
+      esac
+    fi
+    if [ -z "$note" ] && [ ! -d "$p" ]; then
+      note="$repo: directory is missing"; note_kind=skip
+    fi
+    if [ -z "$note" ] && ws_is_dirty "$p"; then
+      note="$repo: uncommitted changes"; note_kind=skip
+    fi
+    if [ -z "$note" ] && [ "$pr_state" != MERGED ]; then
+      # After a squash merge every commit looks unpushed, because the
+      # squashed commit is a different object. Only a merged pull request
+      # settles that, so anything else is for a human to judge.
+      unpushed=$(ws_unpushed_count "$p")
+      if [ "$unpushed" -gt 0 ]; then
+        note="$repo: $unpushed commit(s) on no origin ref"; note_kind=review
+      fi
+    fi
+  done <<EOT
+$records
+EOT
+
+  if [ "$is_env" = 1 ]; then
+    verdict='env'
+    note="env task"
+  elif [ "$total" = 0 ]; then
+    verdict=keep
+    note="no worktrees"
+  elif [ "$landed_n" = "$total" ]; then
+    verdict=${note_kind:-retire}
+    if [ -z "$note" ] && [ "$total" = 1 ]; then
+      note=${evidence#*: }
+    fi
+  elif [ "$landed_n" -gt 0 ]; then
+    verdict=partial
+    note=
+  fi
+
+  case $verdict in
+    retire)  n_retire=$((n_retire + 1)) ;;
+    partial) n_partial=$((n_partial + 1)) ;;
+    review)  n_review=$((n_review + 1)) ;;
+    skip)    n_skip=$((n_skip + 1)) ;;
+    env)     n_env=$((n_env + 1)) ;;
+    *)       n_keep=$((n_keep + 1)) ;;
+  esac
+
+  rows=$rows$task$'\t'$verdict$'\t'$landed_n$'\t'$total$'\t'$note$'\n'
+done <<EOT
+$tasks
+EOT
+
+w_task=4
+while IFS=$'\t' read -r task verdict landed_n total note; do
+  [ -n "$task" ] || continue
+  if [ ${#task} -gt "$w_task" ]; then w_task=${#task}; fi
+done <<EOT
+$rows
+EOT
+
+while IFS=$'\t' read -r task verdict landed_n total note; do
+  [ -n "$task" ] || continue
+  # Pad first, colour second: the escapes must not enter the width maths.
+  cell=$(printf '%-7s' "$verdict")
+  case $verdict in
+    retire)       cell=$(PC_green "$cell") ;;
+    review|skip)  cell=$(PC_yellow "$cell") ;;
+    partial)      cell=$(PC_cyan "$cell") ;;
+    *)            cell=$(PC_dim "$cell") ;;
+  esac
+  printf '%-*s  %s  %-9s  %s\n' "$w_task" "$task" "$cell" "$landed_n/$total landed" "$note" >&2
+done <<EOT
+$rows
+EOT
+
+log_info ""
+log_success "$n_retire to retire, $n_partial partial, $n_review to review, $n_skip skipped, $n_env env, $n_keep kept"
+
+if [ "$do_it" != 1 ]; then
+  if [ "$n_retire" -gt 0 ]; then
+    log_detail "re-run with --yes to retire them"
+  fi
+  exit 0
+fi
+
+failed=0
+while IFS=$'\t' read -r task verdict landed_n total note; do
+  [ "$verdict" = retire ] || continue
+  if [ "$force" = 1 ]; then
+    "$SCRIPT_DIR/task-retire" --yes --no-fetch --force "$task" || failed=$((failed + 1))
+  else
+    "$SCRIPT_DIR/task-retire" --yes --no-fetch "$task" || failed=$((failed + 1))
+  fi
+done <<EOT
+$rows
+EOT
+
+if [ "$failed" -gt 0 ]; then
+  die 7 "$failed task(s) could not be retired"
+fi
+
+log_success "done"

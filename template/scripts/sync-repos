@@ -20,12 +20,15 @@ USAGE='Usage: sync-repos [options] [<repo>...]
   --no-prune      do not pass --prune to fetch
   --no-tags       do not fetch tags
   --fail-fast     stop at the first failure
+  --no-ff         do not fast-forward env-task worktrees
   -h, --help      show this help
 
 Fetches every bare repository under repos/, so origin/* is current for new
-tasks. It never touches a worktree. Fast-forwarding env-task worktrees is not
-implemented yet.'
+tasks. Then fast-forwards each env-task worktree (tasks/main/, tasks/dev/,
+...) that is clean and behind origin/<branch>. A dirty, ahead or diverged
+one is skipped with a warning. Feature tasks are never touched.'
 
+ff=1
 prune=1
 tags=1
 fail_fast=0
@@ -36,6 +39,7 @@ while [ $# -gt 0 ]; do
     --no-prune)  prune=0 ;;
     --no-tags)   tags=0 ;;
     --fail-fast) fail_fast=1 ;;
+    --no-ff)     ff=0 ;;
     -h|--help)   printf '%s\n' "$USAGE"; exit 0 ;;
     --)          shift; break ;;
     -*)          usage_die "unknown option: $1" ;;
@@ -65,6 +69,8 @@ if [ -z "$names" ]; then
 fi
 
 rows=
+synced=
+n_ff=0
 n_updated=0
 n_current=0
 n_skipped=0
@@ -106,6 +112,7 @@ while IFS= read -r name; do
   fi
 
   after=$(git -C "$dir" for-each-ref --format='%(objectname) %(refname)' refs/remotes/origin/)
+  synced="$synced $name "
 
   if [ "$before" = "$after" ]; then
     record "$name" up-to-date "origin/*"
@@ -117,6 +124,67 @@ while IFS= read -r name; do
 done <<EOT
 $names
 EOT
+
+# --- env tasks -----------------------------------------------------------------
+
+# Only repositories fetched just now: fast-forwarding to stale refs is noise.
+if [ "$ff" = 1 ] && [ -n "$synced" ]; then
+  while IFS= read -r task; do
+    [ -n "$task" ] || continue
+    while IFS=$'\t' read -r repo p b f; do
+      [ -n "$repo" ] || continue
+      [ -n "$b" ] || continue
+      [[ $synced == *" $repo "* ]] || continue
+      dir=$REPOS_DIR/$repo.git
+      ws_is_env_branch "$b" "$dir" || continue
+
+      label=tasks/$task/$repo
+      if [ ! -d "$p" ]; then
+        record "$label" skipped "directory is missing"
+        n_skipped=$((n_skipped + 1))
+        continue
+      fi
+      if ! git -C "$dir" rev-parse --verify --quiet "refs/remotes/origin/$b" >/dev/null; then
+        record "$label" skipped "no origin/$b"
+        n_skipped=$((n_skipped + 1))
+        continue
+      fi
+      if ws_is_dirty "$p"; then
+        log_warn "$label has uncommitted changes; not fast-forwarded"
+        record "$label" skipped "uncommitted changes"
+        n_skipped=$((n_skipped + 1))
+        continue
+      fi
+
+      head=$(git -C "$p" rev-parse HEAD)
+      target=$(git -C "$dir" rev-parse "refs/remotes/origin/$b")
+      if [ "$head" = "$target" ]; then
+        record "$label" up-to-date "origin/$b"
+        n_current=$((n_current + 1))
+      elif git -C "$dir" merge-base --is-ancestor "$head" "$target"; then
+        count=$(git -C "$dir" rev-list --count "$head..$target")
+        if git -C "$p" merge --ff-only --quiet "origin/$b" >/dev/null 2>&1; then
+          record "$label" fast-forwarded "$count commit(s) from origin/$b"
+          n_ff=$((n_ff + 1))
+        else
+          record "$label" failed "git merge --ff-only failed"
+          n_failed=$((n_failed + 1))
+        fi
+      elif git -C "$dir" merge-base --is-ancestor "$target" "$head"; then
+        record "$label" skipped "ahead of origin/$b; push it"
+        n_skipped=$((n_skipped + 1))
+      else
+        log_warn "$label has diverged from origin/$b; not fast-forwarded"
+        record "$label" skipped "diverged from origin/$b"
+        n_skipped=$((n_skipped + 1))
+      fi
+    done <<EOT
+$(ws_task_worktrees "$task")
+EOT
+  done <<EOT
+$(ws_list_tasks)
+EOT
+fi
 
 w_name=4
 w_state=6
@@ -133,10 +201,10 @@ while IFS=$'\t' read -r name state detail; do
   # Pad first, colour second: escape bytes must not enter the width maths.
   padded_state=$(printf '%-*s' "$w_state" "$state")
   case $state in
-    updated)    painted=$(PC_green "$padded_state") ;;
-    up-to-date) painted=$(PC_dim "$padded_state") ;;
-    skipped)    painted=$(PC_yellow "$padded_state") ;;
-    *)          painted=$(PC_red "$padded_state") ;;
+    updated|fast-forwarded) painted=$(PC_green "$padded_state") ;;
+    up-to-date)             painted=$(PC_dim "$padded_state") ;;
+    skipped)                painted=$(PC_yellow "$padded_state") ;;
+    *)                      painted=$(PC_red "$padded_state") ;;
   esac
   printf '%-*s  %s  %s\n' "$w_name" "$name" "$painted" "$detail"
 done <<EOT
@@ -144,7 +212,7 @@ $rows
 EOT
 
 log_info ""
-log_success "$n_updated updated, $n_current up to date, $n_skipped skipped, $n_failed failed"
+log_success "$n_updated updated, $n_ff fast-forwarded, $n_current up to date, $n_skipped skipped, $n_failed failed"
 
 if [ "$n_failed" -gt 0 ]; then
   exit 7
