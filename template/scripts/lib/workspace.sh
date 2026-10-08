@@ -314,9 +314,13 @@ ws_worktree_records() {
 }
 
 # ws_branch_worktree REPO_DIR BRANCH - the path where BRANCH is checked out.
+#
+# The awk scripts here read all their input instead of exiting at the first
+# match: an early exit can kill the writer with SIGPIPE, which pipefail turns
+# into a failure that callers read as "not found".
 ws_branch_worktree() {
   local dir=$1 branch=$2
-  ws_worktree_records "$dir" | awk -F'\t' -v b="$branch" '$2 == b { print $1; exit }'
+  ws_worktree_records "$dir" | awk -F'\t' -v b="$branch" '!d && $2 == b { print $1; d = 1 }'
 }
 
 # ws_prefix_rows KEY - put KEY and a tab in front of every non-empty line on
@@ -330,7 +334,7 @@ ws_prefix_rows() {
 # is NAME, with the key column removed.
 ws_row_lookup() {
   printf '%s\n' "$1" | awk -F'\t' -v k="$2" -v n="$3" \
-    '$1 == k && $2 == n { sub(/^[^\t]*\t/, ""); print; exit }'
+    '!d && $1 == k && $2 == n { sub(/^[^\t]*\t/, ""); print; d = 1 }'
 }
 
 # ------------------------------------------------------------------------------
@@ -726,7 +730,7 @@ ws_landed() {
     return 0
   fi
 
-  line=$(ws_branch_table "$dir" | awk -F'\t' -v n="$b" '$1 == n { print; exit }')
+  line=$(ws_branch_table "$dir" | awk -F'\t' -v n="$b" '!d && $1 == n { print; d = 1 }')
   upstream=$(printf '%s' "$line" | cut -f2)
   track=$(printf '%s' "$line" | cut -f3)
 
