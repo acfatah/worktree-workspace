@@ -90,24 +90,25 @@ if [ "$want_pr" != 0 ]; then
   fi
 fi
 
-# Per-repository caches, filled on first use: a repository shared by many
-# tasks is fetched and asked for pull requests once.
-declare -A branch_cache=()
-declare -A pr_cache=()
+# Per-repository tables, filled on first use and keyed by repository name: a
+# repository shared by many tasks is fetched and asked for pull requests once.
+loaded=' '
+branch_rows=
+pr_rows=
 
 repo_tables() {
   local repo=$1 dir=$REPOS_DIR/$1.git
-  if [ -n "${branch_cache[$repo]+set}" ]; then
-    return 0
-  fi
+  case $loaded in
+    *" $repo "*) return 0 ;;
+  esac
+  loaded="$loaded$repo "
   if [ "$do_fetch" = 1 ]; then
     git -C "$dir" fetch --prune --quiet origin 2>/dev/null || \
       log_warn "$repo: fetch failed"
   fi
-  branch_cache[$repo]=$(ws_branch_table "$dir")
-  pr_cache[$repo]=
+  branch_rows=$branch_rows$(ws_branch_table "$dir" | ws_prefix_rows "$repo")$'\n'
   if [ "$pr_available" = 1 ]; then
-    pr_cache[$repo]=$(ws_pr_table "$dir")
+    pr_rows=$pr_rows$(ws_pr_table "$dir" | ws_prefix_rows "$repo")$'\n'
   fi
 }
 
@@ -133,7 +134,7 @@ while IFS= read -r task; do
     upstream=
     track=
     if [ -n "$b" ]; then
-      line=$(printf '%s\n' "${branch_cache[$repo]}" | awk -F'\t' -v n="$b" '$1 == n { print; exit }')
+      line=$(ws_row_lookup "$branch_rows" "$repo" "$b")
       upstream=$(printf '%s' "$line" | cut -f2)
       track=$(printf '%s' "$line" | cut -f3)
     fi
@@ -169,8 +170,8 @@ while IFS= read -r task; do
 
     pr_num='-'
     pr_state='-'
-    if [ -n "${pr_cache[$repo]}" ] && [ -n "$b" ]; then
-      pr_line=$(printf '%s\n' "${pr_cache[$repo]}" | awk -F'\t' -v n="$b" '$1 == n { print; exit }')
+    if [ -n "$pr_rows" ] && [ -n "$b" ]; then
+      pr_line=$(ws_row_lookup "$pr_rows" "$repo" "$b")
       if [ -n "$pr_line" ]; then
         pr_num=$(printf '%s' "$pr_line" | cut -f2)
         pr_state=$(printf '%s' "$pr_line" | cut -f3)

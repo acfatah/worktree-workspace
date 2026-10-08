@@ -313,6 +313,20 @@ ws_branch_worktree() {
   ws_worktree_records "$dir" | awk -F'\t' -v b="$branch" '$2 == b { print $1; exit }'
 }
 
+# ws_prefix_rows KEY - put KEY and a tab in front of every non-empty line on
+# stdin. With ws_row_lookup this stands in for associative arrays, which bash
+# 3.2 lacks: several repositories' tables share one string.
+ws_prefix_rows() {
+  awk -v k="$1" 'NF { print k "\t" $0 }'
+}
+
+# ws_row_lookup ROWS KEY NAME - the first row of ROWS for KEY whose next field
+# is NAME, with the key column removed.
+ws_row_lookup() {
+  printf '%s\n' "$1" | awk -F'\t' -v k="$2" -v n="$3" \
+    '$1 == k && $2 == n { sub(/^[^\t]*\t/, ""); print; exit }'
+}
+
 # ------------------------------------------------------------------------------
 # GitHub, always optional
 # ------------------------------------------------------------------------------

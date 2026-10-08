@@ -80,7 +80,7 @@ if [ -z "$tasks" ]; then
 fi
 
 # Fetch and clear stale records once per repository, before judging anything.
-declare -A pr_cache=()
+pr_rows=
 while IFS= read -r repo; do
   [ -n "$repo" ] || continue
   dir=$REPOS_DIR/$repo.git
@@ -89,7 +89,7 @@ while IFS= read -r repo; do
     git -C "$dir" fetch --prune --quiet origin || \
       log_warn "$repo: fetch failed; landing may be judged against stale refs"
   fi
-  pr_cache[$repo]=$(ws_pr_table "$dir")
+  pr_rows=$pr_rows$(ws_pr_table "$dir" | ws_prefix_rows "$repo")$'\n'
 done <<EOT
 $(ws_list_repos)
 EOT
@@ -128,8 +128,8 @@ while IFS= read -r task; do
     fi
 
     pr_state=
-    if [ -n "${pr_cache[$repo]}" ]; then
-      pr_state=$(printf '%s\n' "${pr_cache[$repo]}" | awk -F'\t' -v n="$b" '$1 == n { print $3; exit }')
+    if [ -n "$pr_rows" ]; then
+      pr_state=$(ws_row_lookup "$pr_rows" "$repo" "$b" | cut -f3)
     fi
     v=$(ws_landed "$dir" "$b" "$pr_state")
     case ${v%%$'\t'*} in
