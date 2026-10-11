@@ -47,6 +47,7 @@ git config --file "$GIT_CONFIG_GLOBAL" advice.detachedHead false
 
 n=0
 failures=0
+skipped=0
 current=
 
 t() {
@@ -68,6 +69,13 @@ check() {
   shift 2
   t "$desc"
   if [ "$result" = 0 ]; then pass; else fail "$@"; fi
+}
+
+skip() {
+  # skip DESCRIPTION REASON
+  t "$1"
+  printf 'ok %d - %s # SKIP %s\n' "$n" "$current" "$2"
+  skipped=$((skipped + 1))
 }
 
 skip_filtered() {
@@ -758,19 +766,21 @@ git -C "$E" reset -q --hard origin/main
 # ------------------------------------------------------------------------------
 
 syntax_bad=
+scripts=()
 for f in "$REPO_ROOT"/template/scripts/* "$REPO_ROOT"/template/scripts/lib/*.sh; do
   [ -f "$f" ] || continue
   case $f in *.md) continue ;; esac
+  scripts+=("$f")
   bash -n "$f" 2>/dev/null || syntax_bad="$syntax_bad $f"
 done
 check "every script parses" "$( [ -z "$syntax_bad" ]; echo $? )" "bad:$syntax_bad"
 
-if command -v shellcheck >/dev/null 2>&1; then
-  if shellcheck -x -P SCRIPTDIR "$REPO_ROOT"/template/scripts/* "$REPO_ROOT"/template/scripts/lib/*.sh >/dev/null 2>&1; then
-    check "shellcheck is clean" 0
-  else
-    check "shellcheck is clean" 1 "run: shellcheck -x -P SCRIPTDIR template/scripts/* template/scripts/lib/*.sh"
-  fi
+if ! command -v shellcheck >/dev/null 2>&1; then
+  skip "shellcheck is clean" "shellcheck not installed"
+elif shellcheck -x -P SCRIPTDIR "${scripts[@]}" >/dev/null 2>&1; then
+  check "shellcheck is clean" 0
+else
+  check "shellcheck is clean" 1 "run: find template/scripts -type f -exec shellcheck -x -P SCRIPTDIR {} +"
 fi
 
 # ------------------------------------------------------------------------------
@@ -783,4 +793,8 @@ if [ "$failures" -gt 0 ]; then
   printf '%d of %d checks failed\n' "$failures" "$n" >&2
   exit 1
 fi
-printf 'all %d checks passed\n' "$n"
+if [ "$skipped" -gt 0 ]; then
+  printf 'all %d checks passed (%d skipped)\n' "$n" "$skipped"
+else
+  printf 'all %d checks passed\n' "$n"
+fi

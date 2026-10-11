@@ -27,14 +27,15 @@ package.json. The product is bash.
 bash test/smoke.sh             # full end-to-end suite, TAP output
 bash test/smoke.sh --keep      # keep the temp workspace for inspection
 bash test/smoke.sh --verbose   # set -x
-shellcheck -x -P SCRIPTDIR template/scripts/* template/scripts/lib/*.sh
+find template/scripts -type f -exec shellcheck -x -P SCRIPTDIR {} +
 ```
 
 - **No single-test mode.** Checks run in order against one shared workspace,
   each building on the state the previous ones left. `--filter` is parsed,
   but `skip_filtered` is never called, so it does nothing.
-- **Shellcheck is optional in the suite**: it runs only when installed, so a
-  green run without it has not linted.
+- **Shellcheck is optional in the suite**: without it the check reports
+  `ok N - shellcheck is clean # SKIP shellcheck not installed` and the
+  summary counts the skip, so an unlinted run is visible.
 - The suite needs no network: it builds `file://` origins under `mktemp -d`,
   isolates `HOME` and git config, and sets `WORKFLOW_NO_GH=1` and
   `WORKFLOW_YES=1`.
