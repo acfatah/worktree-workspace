@@ -29,8 +29,10 @@ find template/scripts -type f -exec shellcheck -x -P SCRIPTDIR {} +
 ```
 
 - **No single-test mode.** Checks run in order against one shared workspace,
-  each building on the state the previous ones left. `--filter` is parsed,
-  but `skip_filtered` is never called, so it does nothing.
+  each building on the state the previous ones left. `--filter <s>` still
+  runs them all but prints only checks whose description contains `<s>`,
+  numbered from 1. Failures always print, and a filter that matches
+  nothing exits 1.
 - **Shellcheck is optional in the suite**: without it the check reports
   `ok N - shellcheck is clean # SKIP shellcheck not installed` and the
   summary counts the skip, so an unlinted run is visible.
