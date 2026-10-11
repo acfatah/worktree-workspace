@@ -8,7 +8,8 @@ code in this repository.
 The source of a workspace scaffold, not the workspace itself. Users copy
 `template/` into an empty folder with gitpick (command in `README.md`).
 Everything that ships lives under `template/`; the repo root holds only the
-tour (`README.md`), the test, and editor config.
+tour (`README.md`), the test, and editor config. The product is bash; there
+is no package.json.
 
 Three docs, three audiences:
 
@@ -17,9 +18,6 @@ Three docs, three audiences:
   exit code and hook. Change it whenever a script's behaviour changes.
 - **`template/CLAUDE.md`**: shipped placement rules for agents working *inside*
   a workspace. It does not apply to this repository.
-
-`.bun-version` and `tsconfig.json` are leftovers; there is no TypeScript or
-package.json. The product is bash.
 
 ## Commands
 

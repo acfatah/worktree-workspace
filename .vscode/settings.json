@@ -1,26 +1,4 @@
 {
-  // Use the TypeScript version installed in the workspace
-  "js/ts.tsdk.path": "node_modules/typescript/lib",
-
-  // Custom Tailwind CSS v4 functions and directives
-  // https://tailwindcss.com/docs/functions-and-directives
-  // https://grok.com/share/bGVnYWN5_1cf7d218-282e-46e5-acc6-efb07d12d35e
-  "css.customData": [
-    ".vscode/tailwind.json"
-  ],
-
   "git.autoRepositoryDetection": true,
-  "git.detectWorktrees": true,
-  "git.scanRepositories": [
-    "apps/app",
-    "apps/api"
-  ],
-
-  "chat.tools.terminal.autoApprove": {
-    "/^node -e \"const p=require\\('/home/achmad/\\.vscode-server/bin/08d4889f9ec4a1685d257b9b95de036c8e1ce1e5/extensions/git/package\\.json'\\); const c=p\\.contributes\\.configuration\\.properties; for \\(const k of \\['git\\.autoRepositoryDetection','git\\.scanRepositories','git\\.repositoryScanMaxDepth','git\\.detectWorktrees'\\]\\) console\\.log\\(k, JSON\\.stringify\\(c\\[k\\]\\)\\);\"$/": {
-      "approve": true,
-      "matchCommandLine": true
-    }
-  }
+  "git.detectWorktrees": true
 }
-
