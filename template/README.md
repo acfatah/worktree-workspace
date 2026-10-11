@@ -106,6 +106,11 @@ It keeps only the default branch as a local branch, tracking
 `origin/<default>`. Any other local branch was made by a task. It creates
 no worktree; start one with `task-create`.
 
+A name may use letters, digits, `.`, `_` and `-`, and must not end in
+`.git`. Names that a task folder already uses are reserved: `CLAUDE.md`,
+`NOTES.md`, `drafts`, `generated`, and any name starting with `.`, such as
+`.claude`. Each fails with exit 2; pass another name as `<name>`.
+
 ## task-create
 
     scripts/task-create [options] <branch> <repo>...
