@@ -10,7 +10,7 @@ under `branches/`. See `CLAUDE.md` for where each kind of document belongs.
 workspace/                  # a plain folder, not a git repository
 ├── CLAUDE.md               # placement rules for the task workflow
 ├── .claude/plans/          # cross-task plan links
-├── archive/<task>/         # notes and plans of retired tasks
+├── archive/<task>/         # task folders of retired tasks
 ├── branches/               # optional; created by branch-add
 │   ├── main/               # branch checkout: production
 │   │   ├── app/
@@ -25,6 +25,8 @@ workspace/                  # a plain folder, not a git repository
 │       ├── CLAUDE.md       # generated: the branch, where notes go
 │       ├── NOTES.md        # generated stub
 │       ├── .claude/plans/  # this task's plan links
+│       ├── drafts/         # on first use: drafts for you to read
+│       ├── generated/      # on first use: outputs worth keeping
 │       ├── app/            # worktree of repos/app.git
 │       └── api/            # worktree of repos/api.git
 └── workspace.conf          # optional; created when you need it
@@ -470,8 +472,10 @@ later does not reach existing tasks; edit their copies, or recreate them.
 ## Task notes
 
 Nothing in a task folder outside the worktrees is authoritative, reviewed or
-current. It is working material: `NOTES.md`, research, handoffs, and the
-task's plan links in `.claude/plans/`. Notes that span tasks go in `docs/`.
+current. It is working material: `NOTES.md`, research, handoffs, the task's
+plan links in `.claude/plans/`, drafts for you to read in `drafts/`, and
+generated files worth keeping in `generated/`. Notes that span tasks go in
+`docs/`. `CLAUDE.md` says what goes in each.
 
 `task-retire` moves the folder to `archive/<task>/`, with plan links turned
 into real files. Keep the archive for the reasoning, not the answer.

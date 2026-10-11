@@ -294,7 +294,8 @@ check "a new task branch has no upstream" "$( [ -z "$(upstream "$T/app")" ]; ech
 
 check "task-create writes CLAUDE.md, NOTES.md and .claude/plans/" \
   "$( [ -f "$T/CLAUDE.md" ] && [ -f "$T/NOTES.md" ] && [ -d "$T/.claude/plans" ] \
-      && grep -q 'feat/login' "$T/CLAUDE.md"; echo $? )"
+      && grep -q 'feat/login' "$T/CLAUDE.md" && grep -q 'drafts/' "$T/CLAUDE.md" \
+      && grep -q 'generated/' "$T/CLAUDE.md"; echo $? )"
 
 printf 'my notes\n' >> "$T/NOTES.md"
 cp "$T/CLAUDE.md" "$TEST_ROOT/claude.before"
