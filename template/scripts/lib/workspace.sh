@@ -481,6 +481,8 @@ branch.
 
 - Notes: \`NOTES.md\`
 - Plans: \`.claude/plans/\` (links)
+- Drafts for the user to read: \`drafts/\`
+- Generated files worth keeping: \`generated/\`
 - Cross-task notes: \`../../docs/\`
 
 Workspace rules: \`../../CLAUDE.md\`.
