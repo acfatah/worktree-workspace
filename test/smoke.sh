@@ -178,6 +178,15 @@ check "repo-add refuses an existing repo with exit 4" "$( [ $? = 4 ]; echo $? )"
 wt repo-add "file://$TEST_ROOT/origin/app.git" 'bad name' >/dev/null 2>&1
 check "repo-add refuses a bad name with exit 2" "$( [ $? = 2 ]; echo $? )"
 
+reserved_rc=
+for reserved in drafts generated NOTES.md CLAUDE.md .claude ..; do
+  wt repo-add "file://$TEST_ROOT/origin/app.git" "$reserved" >/dev/null 2>&1
+  rc=$?
+  [ "$rc" = 2 ] || reserved_rc="$reserved_rc $reserved=$rc"
+done
+check "repo-add refuses names reserved for the task folder with exit 2" \
+  "$( [ -z "$reserved_rc" ] && [ ! -e "$WS/repos/drafts.git" ]; echo $? )" "got:$reserved_rc"
+
 wt repo-add "file://$TEST_ROOT/origin/legacy.git" legacy >/dev/null 2>&1
 default=$(lib ws_default_branch "$WS/repos/legacy.git" 2>/dev/null)
 check "repo-add detects a master default branch" \

@@ -207,6 +207,22 @@ ws_check_branch() {
   fi
 }
 
+# ws_check_repo_name NAME - reject names that cannot be a folder in a task.
+# Worktrees live at tasks/<task>/<name>/, beside the task's own files.
+ws_check_repo_name() {
+  local name=$1
+  case $name in
+    ''|*[!A-Za-z0-9._-]*|*.git)
+      die 2 "cannot use '$name' as a repository name" \
+            "pass an explicit name: repo-add <url> <name>"
+      ;;
+    .*|CLAUDE.md|NOTES.md|drafts|generated)
+      die 2 "'$name' is reserved for the task folder" \
+            "pass another name: repo-add <url> <name>"
+      ;;
+  esac
+}
+
 # ------------------------------------------------------------------------------
 # Git state
 # ------------------------------------------------------------------------------

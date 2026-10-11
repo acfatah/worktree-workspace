@@ -67,12 +67,7 @@ if [ -z "$name" ]; then
   name=${name%.git}
 fi
 
-case $name in
-  ''|*[!A-Za-z0-9._-]*|*.git)
-    die 2 "cannot use '$name' as a repository name" \
-          "pass an explicit name: repo-add $url <name>"
-    ;;
-esac
+ws_check_repo_name "$name"
 
 if [ -n "$branch" ]; then
   ws_check_branch "$branch"
