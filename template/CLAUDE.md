@@ -30,6 +30,8 @@ must outlive the branch is written somewhere else.
 | --- | --- | --- | --- |
 | ADRs, glossary, repo docs | the repository, committed | every branch, and the PR | stays in the repo |
 | Task notes, research, handoffs | `tasks/<task>/NOTES.md`, or files beside it | the task's session | moves to `archive/<task>/` |
+| Drafts for the user to read, such as PR summaries | `tasks/<task>/drafts/` | the user | moves to `archive/<task>/` |
+| Generated files worth keeping: scripts, data, reports | `tasks/<task>/generated/` | the task's session | moves to `archive/<task>/` |
 | Plan links | `tasks/<task>/.claude/plans/` | the task's session | copied as real files into `archive/<task>/` |
 | Cross-task notes, specs, plans | `docs/`, `.claude/plans/` | every session | stays |
 | Ignored local files, such as `.env` | `shared/<repo>/` | every new worktree of `<repo>` | stays |
@@ -40,6 +42,21 @@ must outlive the branch is written somewhere else.
 The task folder sits above its worktrees. That is why notes and plans kept
 there survive `git worktree remove`, which deletes a worktree's ignored
 files without counting them as changes.
+
+## Drafts and generated files
+
+In a workspace, `drafts/` means `tasks/<task>/drafts/`. This overrides any
+rule that puts `drafts/` at a repository root: there it would sit inside a
+worktree and be deleted on retire. The task folder is not in a repository,
+so neither folder needs a gitignore or `info/exclude` entry.
+
+- **`drafts/`:** text the user reviews and pastes elsewhere. Name PR
+  summaries per repository, `PR_SUMMARY-<repo>.md`, since one task opens
+  one PR per repository.
+- **`generated/`:** outputs that stay with the task and are reused, such
+  as scripts, data exports and reports. Promote a file into a repository
+  and commit it once it earns a permanent place.
+- **Neither:** throwaway working files go in the session's scratchpad.
 
 ## Plan links
 
