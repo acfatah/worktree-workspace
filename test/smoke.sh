@@ -6,6 +6,9 @@
 # every script against them. No network, no dependencies beyond bash and git.
 #
 #   bash test/smoke.sh [--keep] [--filter <substring>] [--verbose]
+#
+# --filter still runs every check, since each builds on the last, but prints
+# only those whose description contains the substring. Failures always print.
 
 set -uo pipefail
 
@@ -19,7 +22,7 @@ while [ $# -gt 0 ]; do
     --keep)    KEEP=1 ;;
     --filter)  shift; FILTER=${1:-} ;;
     --verbose) VERBOSE=1 ;;
-    -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
     *)         printf 'unknown option: %s\n' "$1" >&2; exit 2 ;;
   esac
   shift
@@ -46,6 +49,7 @@ git config --file "$GIT_CONFIG_GLOBAL" protocol.file.allow always
 git config --file "$GIT_CONFIG_GLOBAL" advice.detachedHead false
 
 n=0
+shown=0
 failures=0
 skipped=0
 current=
@@ -55,10 +59,23 @@ t() {
   n=$((n + 1))
 }
 
-pass() { printf 'ok %d - %s\n' "$n" "$current"; }
+skip_filtered() {
+  case ${1:-} in
+    *"$FILTER"*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+pass() {
+  skip_filtered "$current" && return 0
+  shown=$((shown + 1))
+  printf 'ok %d - %s\n' "$shown" "$current"
+}
 
 fail() {
-  printf 'not ok %d - %s\n' "$n" "$current"
+  # Failures print even outside --filter, so a filtered run cannot hide one.
+  shown=$((shown + 1))
+  printf 'not ok %d - %s\n' "$shown" "$current"
   printf '  %s\n' "$@" | sed 's/^/  /'
   failures=$((failures + 1))
 }
@@ -74,15 +91,10 @@ check() {
 skip() {
   # skip DESCRIPTION REASON
   t "$1"
-  printf 'ok %d - %s # SKIP %s\n' "$n" "$current" "$2"
+  skip_filtered "$current" && return 0
+  shown=$((shown + 1))
+  printf 'ok %d - %s # SKIP %s\n' "$shown" "$current" "$2"
   skipped=$((skipped + 1))
-}
-
-skip_filtered() {
-  case ${1:-} in
-    *"$FILTER"*) return 1 ;;
-    *) return 0 ;;
-  esac
 }
 
 if [ "$VERBOSE" = 1 ]; then set -x; fi
@@ -785,16 +797,24 @@ fi
 
 # ------------------------------------------------------------------------------
 
-printf '\n1..%d\n' "$n"
+printf '\n1..%d\n' "$shown"
 if [ "$KEEP" = 1 ]; then
   printf 'kept: %s\n' "$TEST_ROOT"
 fi
 if [ "$failures" -gt 0 ]; then
-  printf '%d of %d checks failed\n' "$failures" "$n" >&2
+  printf '%d of %d checks failed\n' "$failures" "$shown" >&2
   exit 1
 fi
-if [ "$skipped" -gt 0 ]; then
-  printf 'all %d checks passed (%d skipped)\n' "$n" "$skipped"
-else
-  printf 'all %d checks passed\n' "$n"
+if [ -n "$FILTER" ] && [ "$shown" = 0 ]; then
+  printf "no checks match --filter '%s'\n" "$FILTER" >&2
+  exit 1
 fi
+if [ -n "$FILTER" ]; then
+  summary="all $shown matching checks passed ($((n - shown)) hidden by --filter)"
+else
+  summary="all $shown checks passed"
+fi
+if [ "$skipped" -gt 0 ]; then
+  summary="$summary ($skipped skipped)"
+fi
+printf '%s\n' "$summary"
