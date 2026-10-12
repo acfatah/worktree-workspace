@@ -21,6 +21,14 @@ The scripts need bash 3.2 and git 2.23 or newer; `gh` is optional.
 Moving a project you already have cloned? See
 [Adopting an Existing Project](#adopting-an-existing-project).
 
+## Compatibility
+
+The workflow, and the agent rules in its `CLAUDE.md` files, were built and
+tested with Claude Code running Claude Opus 5. Other models, other
+providers, and other agent harnesses may follow the rules differently, or
+not at all, so the same results are not guaranteed there. The scripts
+themselves are plain bash and git and do not depend on any agent.
+
 ## Directory Structure
 
 After running the Quick Start command and adding two repositories, the
@@ -178,6 +186,31 @@ The branch must already exist. `branches/` is created on the first
 `task-create` refuses an env branch such as `main` and points to
 `branch-add`, so `tasks/` only ever holds units of work. List other env
 branches in `workspace.conf` as `ENV_BRANCHES="main dev staging"`.
+
+## Effects on Claude Code
+
+The workspace adds no Claude Code hooks and changes no model or harness
+setting. Its `.workflow/` hooks are git-side scripts that the `task-*`
+commands run. Each task's generated `.claude/settings.json` only adds
+directories and one allow rule.
+
+A task folder is not a git repository, though, and Claude Code keys much of
+its state on the folder a session starts in. Starting Claude in
+`tasks/<task>/` therefore changes some defaults:
+
+| Area | Claude Code default | In a task folder | What to do |
+| --- | --- | --- | --- |
+| Git context | Branch, status and recent commits in the prompt | None: the task folder is not a repository | Run `git -C <repo> …`; the task's `CLAUDE.md` names the branch |
+| Review commands | Run in the current folder | Fail at the task level | `cd` into each worktree and run one review per repository |
+| Built-in worktrees | `claude --worktree`, `EnterWorktree`, `isolation: "worktree"` | Fail, or land under `repos/<repo>.git/.claude/worktrees/` | Don't use them; start another task with `task-create` |
+| Project settings | Read from the launch folder | The root `.claude/settings.json` is ignored | Use each task's file, or user settings |
+| Trust prompt | Once per project | Once per task folder | Accept it on each new task, or `git init` the workspace root |
+| Auto-memory | Per project | Per task folder, orphaned on retire | Keep lasting knowledge in the repository or `docs/` |
+| Session history | Per folder | Leaves `/resume` once the folder is archived | Use `claude --resume <session-id>` |
+| Saved approvals | Per project | Per task | Put standing permissions in settings files |
+
+The workspace `references/workspace.md` explains each row under "Claude
+Code settings" and "Claude state per task".
 
 ## Adopting an Existing Project
 
