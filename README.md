@@ -29,7 +29,7 @@ workspace looks like this:
 ```
 project-root/               # a plain folder, not a git repository
 ├── CLAUDE.md               # Placement rules for the task workflow.
-├── README.md               # Workspace guide and the full script reference.
+├── README.md               # Yours: describe the workspace.
 ├── .claude/plans/          # Cross-task plan links.
 ├── archive/                # Notes and plans of retired tasks.
 ├── branches/               # Optional branch checkouts, made on request.
@@ -38,6 +38,7 @@ project-root/               # a plain folder, not a git repository
 │   │   └── server/
 │   └── dev/                # Development server.
 ├── docs/                   # Cross-task notes, specs and diagrams.
+├── references/             # Workspace guide and the full script reference.
 ├── repos/
 │   ├── client.git/         # Bare clone.
 │   └── server.git/         # Bare clone.
@@ -54,8 +55,10 @@ project-root/               # a plain folder, not a git repository
 ```
 
 In this repository the same tree lives under `template/`, which is what
-`gitpick` copies. The workspace's own `README.md` documents every command,
-its options, and the per-repository hooks; this page is the tour.
+`gitpick` copies. The workspace's `references/workspace.md` documents every
+command, its options, and the per-repository hooks; this page is the tour.
+The workspace's root `README.md` is a stub for you to describe your own
+workspace.
 
 ## Workflow Steps
 
@@ -104,8 +107,8 @@ Every worktree gets its own copy of `shared/<repo>/.env`, so the hook
 rewrites `DATABASE_URL` for this task only; the scripts never edit `.env`
 themselves. A branch-specific database keeps schema migrations from
 breaking other branches. Tear it down in `.workflow/pre-retire`, which
-step 6 runs. The workspace README has the full hook contract and the
-matching `pre-retire`.
+step 6 runs. The workspace's `references/workspace.md` has the full hook
+contract and the matching `pre-retire`.
 
 ### 3. Plan in the Task Folder
 
@@ -282,7 +285,7 @@ with your own values in place of the placeholders:
 Adopt my existing project into this worktree workspace. Follow
 "Adopting an Existing Project" in the workspace guide at
 https://github.com/acfatah/worktree-workspace#adopting-an-existing-project
-and README.md here for the script reference.
+and references/workspace.md here for the script reference.
 
 - Existing clone(s): <path>, <path>
 - Branches to bring over: <all local branches | list>
