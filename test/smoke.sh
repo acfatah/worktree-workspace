@@ -109,7 +109,7 @@ make_origin() {
   git init --bare -q -b "$branch" "$TEST_ROOT/origin/$name.git"
   git init -q -b "$branch" "$TEST_ROOT/seed-$name"
   (
-    cd "$TEST_ROOT/seed-$name"
+    cd "$TEST_ROOT/seed-$name" || exit
     printf '%s\n' "$name" > README.md
     printf '.env\n!.env.example\n' > .gitignore
     printf 'KEY=example\n' > .env.example
@@ -132,10 +132,12 @@ WS=$TEST_ROOT/ws
 mkdir -p "$WS"
 cp -R "$REPO_ROOT/template/." "$WS/"
 
-wt() { ( cd "$WS" && ./scripts/"$@" ); }
+wt() { local cmd=$1; shift; ( cd "$WS" && "./scripts/$cmd" "$@" ); }
 
 # lib FUNCTION ARGS... - call a workspace.sh helper inside the test workspace.
 lib() {
+  # shellcheck disable=SC2034  # read by the sourced workspace.sh
+  # shellcheck source=/dev/null
   ( WORKSPACE_ROOT=$WS; . "$WS/scripts/lib/workspace.sh"; "$@" )
 }
 
@@ -271,7 +273,7 @@ branch_of() { git -C "$1" symbolic-ref --quiet --short HEAD 2>/dev/null; }
 
 # Fixtures: a pushed feature branch, and branches carrying post-create hooks.
 (
-  cd "$TEST_ROOT/seed-app"
+  cd "$TEST_ROOT/seed-app" || exit
   git switch -qc feat/remote && git commit -q --allow-empty -m remote && git push -q origin feat/remote
   git switch -qc feat/hooked main
   mkdir -p .workflow
@@ -401,7 +403,7 @@ wt task-create feat/occ app >/dev/null 2>&1
 check "a non-empty unregistered target exits 4" "$( [ $? = 4 ]; echo $? )"
 rm -f "$WS/tasks/feat-occ/app/stray"
 wt task-create feat/occ app >/dev/null 2>&1
-check "an empty target directory is reused" "$( [ $? = 0 ]; echo $? )"
+check "an empty target directory is reused" $?
 
 # ------------------------------------------------------------------------------
 # branch-add / branch-list / branch-remove
@@ -623,7 +625,7 @@ check "a second retire of the same name appends the date" \
   "$( [ "$rc" = 0 ] && [ "$out" = "$A-$(date +%Y-%m-%d)" ] && [ -d "$out" ]; echo $? )" "rc=$rc out=$out"
 
 (
-  cd "$TEST_ROOT/seed-app"
+  cd "$TEST_ROOT/seed-app" || exit
   git switch -qc feat/retirehook main
   mkdir -p .workflow
   cat > .workflow/pre-retire <<HOOK
@@ -739,7 +741,7 @@ check "task-prune refuses an unknown task with exit 3" "$( [ $? = 3 ]; echo $? )
 
 # push_main - a new commit on origin main; prints its id.
 push_main() {
-  ( cd "$TEST_ROOT/seed-app" && git commit -q --allow-empty -m "${1:-upstream}" \
+  ( cd "$TEST_ROOT/seed-app" && git commit -q --allow-empty -m upstream \
       && git push -q origin main && git rev-parse HEAD )
 }
 
@@ -799,10 +801,10 @@ check "every script parses" "$( [ -z "$syntax_bad" ]; echo $? )" "bad:$syntax_ba
 
 if ! command -v shellcheck >/dev/null 2>&1; then
   skip "shellcheck is clean" "shellcheck not installed"
-elif shellcheck -x -P SCRIPTDIR "${scripts[@]}" >/dev/null 2>&1; then
+elif shellcheck -x -P SCRIPTDIR "${scripts[@]}" "$REPO_ROOT/test/smoke.sh" >/dev/null 2>&1; then
   check "shellcheck is clean" 0
 else
-  check "shellcheck is clean" 1 "run: find template/scripts -type f -exec shellcheck -x -P SCRIPTDIR {} +"
+  check "shellcheck is clean" 1 "run: find template/scripts test -type f -exec shellcheck -x -P SCRIPTDIR {} +"
 fi
 
 # ------------------------------------------------------------------------------

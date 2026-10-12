@@ -31,7 +31,7 @@ workspace; it only points to the reference. Keep reference content out of it.
 bash test/smoke.sh             # full end-to-end suite, TAP output
 bash test/smoke.sh --keep      # keep the temp workspace for inspection
 bash test/smoke.sh --verbose   # set -x
-find template/scripts -type f -exec shellcheck -x -P SCRIPTDIR {} +
+find template/scripts test -type f -exec shellcheck -x -P SCRIPTDIR {} +
 ```
 
 - **No single-test mode.** Checks run in order against one shared workspace,
