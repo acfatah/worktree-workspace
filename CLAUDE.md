@@ -11,7 +11,7 @@ Everything that ships lives under `template/`; the repo root holds only the
 tour (`README.md`), the test, and editor config. The product is bash; there
 is no package.json.
 
-Three docs, three audiences, plus a stub:
+Four docs, each with its own job, plus a stub:
 
 - **`README.md`** (root): the tour for someone deciding to adopt it.
 - **`template/references/workspace.md`**: the shipped reference for every
@@ -19,6 +19,8 @@ Three docs, three audiences, plus a stub:
   behaviour changes.
 - **`template/CLAUDE.md`**: shipped placement rules for agents working *inside*
   a workspace. It does not apply to this repository.
+- **`template/references/workspace-glossary.md`**: the shipped definition of
+  every workspace term. Change it whenever a term's meaning changes.
 
 `template/README.md` is a short stub the user rewrites to describe their own
 workspace; it only points to the reference. Keep reference content out of it.
@@ -85,10 +87,10 @@ These were each fixed after a real bug; keep them.
 
 ## Domain vocabulary
 
-Use the glossary in `README.md` exactly: task, task folder name, slug, scope,
-env branch, branch checkout, landed, retire, plan link, shared files,
-lifecycle hook. Env branches are never tasks: `task-create` refuses them and
-points to `branch-add`.
+Use the glossary in `template/references/workspace-glossary.md` exactly:
+task, task folder name, slug, scope, env branch, branch checkout, landed,
+retire, plan link, shared files, lifecycle hook. Env branches are never
+tasks: `task-create` refuses them and points to `branch-add`.
 
 ## Commits
 

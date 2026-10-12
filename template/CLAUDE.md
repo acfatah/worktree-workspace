@@ -3,6 +3,7 @@
 This directory is scaffolding, not a git repository. The code lives in bare
 clones under `repos/<name>.git` and in the worktrees under `tasks/` and
 `branches/`. See `references/workspace.md` for the layout and the scripts.
+Use the terms as defined in `references/workspace-glossary.md`.
 
 ## Three CLAUDE.md files
 
