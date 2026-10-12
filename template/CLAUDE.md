@@ -22,6 +22,13 @@ Start Claude in `tasks/<task>/`. From there one session sees every
 repository of the task, its `NOTES.md` and its plans. Run cross-task work,
 such as a spec that spans several tasks, from the workspace root.
 
+The task's `.claude/settings.json` lets its session write `../../docs/` and
+`../../.claude/plans/` and run `../../scripts/` without prompting, once the
+task folder is trusted: accept the trust prompt on its first start. The
+root `.claude/settings.json` does not apply in task sessions; put shared
+settings in each task's file or in user settings. See "Claude Code
+settings" in `references/workspace.md`.
+
 ## Placement by lifetime
 
 A worktree is disposable: `scripts/task-retire` removes it. Anything that

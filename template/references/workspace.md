@@ -29,6 +29,7 @@ workspace/                  # a plain folder, not a git repository
 │       ├── CLAUDE.md       # generated: the branch, where notes go
 │       ├── NOTES.md        # generated stub
 │       ├── .claude/plans/  # this task's plan links
+│       ├── .claude/settings.json  # generated: reach docs/ and scripts/
 │       ├── drafts/         # on first use: drafts for you to read
 │       ├── generated/      # on first use: outputs worth keeping
 │       ├── app/            # worktree of repos/app.git
@@ -125,9 +126,10 @@ A name may use letters, digits, `.`, `_` and `-`, and must not end in
           --no-hooks     skip .workflow/post-create
           --no-shared    do not copy shared/<repo>/ into new worktrees
 
-Creates `tasks/<task>/` with `CLAUDE.md`, `NOTES.md` and `.claude/plans/`,
-then one worktree per repository at `tasks/<task>/<repo>`, all on
-`<branch>`. It prints the task path.
+Creates `tasks/<task>/` with `CLAUDE.md`, `NOTES.md`, `.claude/plans/` and
+`.claude/settings.json` (see "Claude Code settings"), then one worktree per
+repository at `tasks/<task>/<repo>`, all on `<branch>`. It prints the task
+path.
 
 **Every repository is checked first**: that it exists, that the target path
 is free, that the branch is not checked out elsewhere, and that the base
@@ -490,3 +492,41 @@ generated files worth keeping in `generated/`. Notes that span tasks go in
 into real files. Keep the archive for the reasoning, not the answer.
 Anything that stabilises belongs in a repository, as documentation or an
 ADR.
+
+## Claude Code settings
+
+Claude Code reads project settings only from the folder a session starts
+in, with no fallback to parent folders. A `.claude/settings.json` at the
+workspace root therefore applies to sessions started at the root, not to
+sessions started in `tasks/<task>/`.
+
+`task-create` writes `tasks/<task>/.claude/settings.json` when it is
+missing, and never overwrites it:
+
+```json
+{
+  "permissions": {
+    "additionalDirectories": ["../../docs", "../../.claude/plans"],
+    "allow": ["Bash(../../scripts/*)"]
+  }
+}
+```
+
+- **What it grants:** a task session can edit cross-task notes in `docs/`
+  and plan links in `.claude/plans/`, and run `../../scripts/<command>`,
+  without a prompt each time. The rule matches the command as typed, so it
+  does not cover an absolute path or `bash ../../scripts/<command>`.
+- **Trust it once per task.** Claude ignores these grants until the folder
+  is trusted. A new task shows the trust prompt on its first interactive
+  start; accept it. A headless `claude -p` in a task that was never
+  trusted gets no grants.
+- **Shared settings** go in each task's file, or in your user settings
+  (`~/.claude/settings.json`). Edit an existing task's file by hand; the
+  file is only written for new tasks.
+- **Worktree sessions are separate.** A session started in
+  `tasks/<task>/<repo>/` is its own project and reads neither this file nor
+  the root one.
+
+Tip: if the workspace root is itself a git repository (`git init` at the
+root), Claude keys trust on the root, so trusting it once covers every task
+folder. Worktrees still ask once, keyed on their `repos/<repo>.git`.

@@ -308,13 +308,20 @@ check "task-create writes CLAUDE.md, NOTES.md and .claude/plans/" \
       && grep -q 'feat/login' "$T/CLAUDE.md" && grep -q 'drafts/' "$T/CLAUDE.md" \
       && grep -q 'generated/' "$T/CLAUDE.md"; echo $? )"
 
+S=$T/.claude/settings.json
+check "task-create writes .claude/settings.json granting docs, plans and scripts" \
+  "$( [ -f "$S" ] && grep -qF '"../../docs"' "$S" && grep -qF '"../../.claude/plans"' "$S" \
+      && grep -qF '"Bash(../../scripts/*)"' "$S" && [ -d "$WS/docs" ] \
+      && [ -d "$WS/.claude/plans" ]; echo $? )"
+
 printf 'my notes\n' >> "$T/NOTES.md"
+printf '{}\n' > "$S"
 cp "$T/CLAUDE.md" "$TEST_ROOT/claude.before"
 wt task-create feat/login app >/dev/null 2>&1
 rc=$?
 check "re-running task-create succeeds and keeps the task files" \
   "$( [ "$rc" = 0 ] && cmp -s "$T/CLAUDE.md" "$TEST_ROOT/claude.before" \
-      && grep -q 'my notes' "$T/NOTES.md"; echo $? )" "rc=$rc"
+      && grep -q 'my notes' "$T/NOTES.md" && [ "$(cat "$S")" = '{}' ]; echo $? )" "rc=$rc"
 
 wt task-create feat/multi app legacy >/dev/null 2>&1
 M=$WS/tasks/feat-multi

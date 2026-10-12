@@ -479,13 +479,14 @@ ws_task_branch() {
   printf '%s\n' "$found"
 }
 
-# ws_write_task_files TASK BRANCH - the task folder, its CLAUDE.md, NOTES.md and
-# .claude/plans/. Existing files are left alone, so a re-run never clobbers
-# notes. CLAUDE.md lists no repositories, so task-add cannot make it stale.
+# ws_write_task_files TASK BRANCH - the task folder, its CLAUDE.md, NOTES.md,
+# .claude/plans/ and .claude/settings.json. Existing files are left alone, so
+# a re-run never clobbers notes. CLAUDE.md lists no repositories, so task-add
+# cannot make it stale.
 ws_write_task_files() {
   local task=$1 branch=$2 dir
   dir=$(ws_task_dir "$task")
-  mkdir -p "$dir/.claude/plans"
+  mkdir -p "$dir/.claude/plans" "$DOCS_DIR" "$WORKSPACE_ROOT/.claude/plans"
 
   if [ ! -e "$dir/CLAUDE.md" ]; then
     cat > "$dir/CLAUDE.md" <<EOT
@@ -513,6 +514,20 @@ EOT
 Branch: \`$branch\`
 EOT
     log_info "wrote    $(ws_rel "$dir/NOTES.md")"
+  fi
+
+  # Claude Code reads project settings only from the launch folder, so the
+  # grants for the workspace folders the task CLAUDE.md points to live here.
+  if [ ! -e "$dir/.claude/settings.json" ]; then
+    cat > "$dir/.claude/settings.json" <<'EOT'
+{
+  "permissions": {
+    "additionalDirectories": ["../../docs", "../../.claude/plans"],
+    "allow": ["Bash(../../scripts/*)"]
+  }
+}
+EOT
+    log_info "wrote    $(ws_rel "$dir/.claude/settings.json")"
   fi
 }
 
