@@ -11,13 +11,17 @@ Everything that ships lives under `template/`; the repo root holds only the
 tour (`README.md`), the test, and editor config. The product is bash; there
 is no package.json.
 
-Three docs, three audiences:
+Three docs, three audiences, plus a stub:
 
 - **`README.md`** (root): the tour for someone deciding to adopt it.
-- **`template/README.md`**: the shipped reference for every command, option,
-  exit code and hook. Change it whenever a script's behaviour changes.
+- **`template/references/workspace.md`**: the shipped reference for every
+  command, option, exit code and hook. Change it whenever a script's
+  behaviour changes.
 - **`template/CLAUDE.md`**: shipped placement rules for agents working *inside*
   a workspace. It does not apply to this repository.
+
+`template/README.md` is a short stub the user rewrites to describe their own
+workspace; it only points to the reference. Keep reference content out of it.
 
 ## Commands
 
@@ -57,8 +61,8 @@ Each command starts with the same symlink-resolving `SCRIPT_DIR` preamble and
 sources `lib/workspace.sh`. The workspace root comes from the library's own
 location, not the current directory (override: `WORKSPACE_ROOT`).
 
-Contracts every command keeps (full table in `template/README.md`,
-"Conventions"):
+Contracts every command keeps (full table in
+`template/references/workspace.md`, "Conventions"):
 
 - **stdout is payload, stderr is logging**, so
   `cd "$(scripts/task-create feat/login app)"` works.
