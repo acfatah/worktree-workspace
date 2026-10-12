@@ -7,20 +7,34 @@ Use the terms as defined in `references/workspace-glossary.md`.
 
 ## Three CLAUDE.md files
 
-Each one does a different job.
+Each one does a different job, and each loads at a different time.
 
 - **This file:** the workspace root. Placement rules for the task workflow.
-  It carries no project domain knowledge.
+  It carries no project domain knowledge. It sits above every task folder,
+  so every session in the workspace loads it at start.
 - **`tasks/<task>/CLAUDE.md`:** written once by `scripts/task-create`. It
-  names the task's branch and where its notes and plans go.
+  names the task's branch and where its notes and plans go. A session
+  started in the task folder loads it at start.
 - **`tasks/<task>/<repo>/CLAUDE.md`:** the product repository's own file.
-  It carries the domain rules and travels with every branch.
+  It carries the domain rules and travels with every branch. It sits below
+  the task folder, so it loads only once the session reads a file in that
+  worktree. Read it before planning work that touches that repository.
 
 ## Where sessions run
 
 Start Claude in `tasks/<task>/`. From there one session sees every
 repository of the task, its `NOTES.md` and its plans. Run cross-task work,
 such as a spec that spans several tasks, from the workspace root.
+
+The task folder is not a git repository, which changes how git works there:
+
+- **No git context.** The session starts without a branch, status or recent
+  commits. `tasks/<task>/CLAUDE.md` names the branch.
+- **Run git as `git -C <repo> …`** from the task folder, once per worktree,
+  for example `git -C app status`.
+- **Review commands** such as `/code-review`, `/security-review` and
+  `/code-review ultra` need a repository as the current directory. `cd` into
+  the worktree first, and run one review per repository.
 
 The task's `.claude/settings.json` lets its session write `../../docs/` and
 `../../.claude/plans/` and run `../../scripts/` without prompting, once the
