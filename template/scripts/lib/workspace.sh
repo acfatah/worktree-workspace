@@ -501,8 +501,6 @@ branch.
 - Drafts for the user to read: \`drafts/\`
 - Generated files worth keeping: \`generated/\`
 - Cross-task notes: \`../../docs/\`
-
-Workspace rules: \`../../CLAUDE.md\`.
 EOT
     log_info "wrote    $(ws_rel "$dir/CLAUDE.md")"
   fi
