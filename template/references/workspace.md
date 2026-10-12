@@ -491,7 +491,8 @@ generated files worth keeping in `generated/`. Notes that span tasks go in
 `task-retire` moves the folder to `archive/<task>/`, with plan links turned
 into real files. Keep the archive for the reasoning, not the answer.
 Anything that stabilises belongs in a repository, as documentation or an
-ADR.
+ADR. Claude's own memory and session history are not part of the folder;
+see "Claude state per task".
 
 ## Claude Code settings
 
@@ -530,3 +531,39 @@ missing, and never overwrites it:
 Tip: if the workspace root is itself a git repository (`git init` at the
 root), Claude keys trust on the root, so trusting it once covers every task
 folder. Worktrees still ask once, keyed on their `repos/<repo>.git`.
+
+## Claude state per task
+
+Claude Code keeps some state per project, and keys it on the folder a
+session starts in when that folder is not a git repository. Each
+`tasks/<task>/` is therefore its own project:
+
+- **Auto-memory** learned in one task does not reach the next task. After
+  `task-retire` it stays filed under the old `tasks/<task>/` path, so even
+  the archived folder does not see it.
+- **Session history** is filed under the task folder's path. Once the folder
+  moves to `archive/<task>/`, `/resume` no longer lists its sessions;
+  `claude --resume <session-id>` still finds one from any folder.
+- **Approvals** saved from a prompt ("don't ask again") are stored per
+  project, so a new task asks again. The generated `.claude/settings.json`
+  already covers `docs/`, `.claude/plans/` and `scripts/`.
+
+A session started in a worktree, `tasks/<task>/<repo>/`, is inside a git
+repository. Claude keys its auto-memory on that repository, so every task's
+worktree of `<repo>` shares one memory. Its session history is still filed
+per folder.
+
+Put state that should outlast a task somewhere that lasts:
+
+| State | Goes to |
+| --- | --- |
+| Knowledge about a product: conventions, decisions, gotchas | the repository's `CLAUDE.md` or docs, committed |
+| Notes and specs that span tasks | `docs/` |
+| Personal preferences | `~/.claude/CLAUDE.md` |
+| Standing permissions | user settings (`~/.claude/settings.json`), or the task's `.claude/settings.json` |
+
+Do not rely on auto-memory for anything the next task needs.
+
+Tip: `autoMemoryDirectory` moves auto-memory to a folder of your choice. Set
+it in your user settings, or by hand in a task's `.claude/settings.json`, to
+share one memory folder across tasks. The template does not set it.

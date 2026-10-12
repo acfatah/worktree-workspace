@@ -43,6 +43,11 @@ root `.claude/settings.json` does not apply in task sessions; put shared
 settings in each task's file or in user settings. See "Claude Code
 settings" in `references/workspace.md`.
 
+Auto-memory and session history belong to the task folder: the next task
+does not see them, and retiring the task orphans them. Write anything worth
+keeping to the repository's `CLAUDE.md` or docs, or to `docs/`, not to
+memory. See "Claude state per task" in `references/workspace.md`.
+
 ## Placement by lifetime
 
 A worktree is disposable: `scripts/task-retire` removes it. Anything that
