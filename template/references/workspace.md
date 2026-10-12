@@ -4,7 +4,8 @@ One bare clone per repository, and one folder per task holding a worktree of
 every repository the task touches, all on the same branch. Notes and plans
 live in the task folder, above its worktrees, so they survive the worktrees.
 Branches you only run or review, such as `main`, are checked out separately
-under `branches/`. See `CLAUDE.md` for where each kind of document belongs.
+under `branches/`. See `CLAUDE.md` for where each kind of document belongs,
+and `workspace-glossary.md` for what each term means.
 
 ```
 workspace/                  # a plain folder, not a git repository
@@ -19,7 +20,7 @@ workspace/                  # a plain folder, not a git repository
 │   │   └── api/
 │   └── dev/                # branch checkout: development server
 ├── docs/                   # cross-task notes, specs, diagrams
-├── references/             # this guide; replaced on upgrade
+├── references/             # this guide and the glossary; replaced on upgrade
 ├── repos/<repo>.git/       # bare clone of each repository
 ├── scripts/                # the ten commands below
 ├── shared/<repo>/          # ignored local files (.env) for new worktrees
