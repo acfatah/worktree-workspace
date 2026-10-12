@@ -10,6 +10,7 @@ under `branches/`. See `CLAUDE.md` for where each kind of document belongs.
 workspace/                  # a plain folder, not a git repository
 ├── CLAUDE.md               # placement rules for the task workflow
 ├── .claude/plans/          # cross-task plan links
+├── .vscode/settings.json   # VS Code: find the worktrees as repositories
 ├── archive/<task>/         # task folders of retired tasks
 ├── branches/               # optional; created by branch-add
 │   ├── main/               # branch checkout: production
