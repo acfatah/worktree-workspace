@@ -116,6 +116,16 @@ A task is one branch name across every repository it touches.
 `scripts/task-list` shows every task, its repositories, and how far each
 one has landed.
 
+Do not use Claude Code's own worktrees here: `claude --worktree`, the
+`EnterWorktree` tool, or a subagent with `isolation: "worktree"`. From the
+task folder they fail. From a worktree they succeed, but in the wrong
+place: under `repos/<repo>.git/.claude/worktrees/`, on a new `worktree-*`
+branch started from the default branch, not the task branch. Commits made
+there never reach the task, and no script lists or removes them. For
+parallel work on another branch, start another task with
+`scripts/task-create`; run parallel subagents within one task without
+worktree isolation.
+
 ## Branch checkouts (optional)
 
 `branches/` holds long-lived checkouts of branches you run or review, not
