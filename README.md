@@ -49,6 +49,7 @@ project-root/               # a plain folder, not a git repository
 │       ├── CLAUDE.md       # Generated: the branch, where notes go.
 │       ├── NOTES.md        # Generated stub.
 │       ├── .claude/plans/  # This task's plan links.
+│       ├── .claude/settings.json  # Generated: reach docs/ and scripts/.
 │       ├── client/         # Worktree.
 │       └── server/         # Worktree.
 └── workspace.conf          # Optional; created when you need it.
@@ -74,7 +75,8 @@ workspace.
 - Run: `scripts/task-create <branch> <repo>...`, for example
   `scripts/task-create feat/login client server`.
 - It creates `tasks/feat-login/` with a worktree of each repository on
-  `feat/login`, plus `CLAUDE.md`, `NOTES.md` and `.claude/plans/`.
+  `feat/login`, plus `CLAUDE.md`, `NOTES.md`, `.claude/plans/` and
+  `.claude/settings.json`.
 - It prints the path, so `cd "$(scripts/task-create feat/login client)"`
   puts you straight into the task.
 - Need another repository later? `scripts/task-add feat-login server`.

@@ -36,6 +36,13 @@ The task folder is not a git repository, which changes how git works there:
   `/code-review ultra` need a repository as the current directory. `cd` into
   the worktree first, and run one review per repository.
 
+The task's `.claude/settings.json` lets its session write `../../docs/` and
+`../../.claude/plans/` and run `../../scripts/` without prompting, once the
+task folder is trusted: accept the trust prompt on its first start. The
+root `.claude/settings.json` does not apply in task sessions; put shared
+settings in each task's file or in user settings. See "Claude Code
+settings" in `references/workspace.md`.
+
 ## Placement by lifetime
 
 A worktree is disposable: `scripts/task-retire` removes it. Anything that
