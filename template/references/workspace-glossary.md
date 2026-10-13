@@ -44,6 +44,9 @@ in its repository.
   touches, in one folder under `tasks/`.
 - **Task folder name** — the branch name with every slash turned into a
   hyphen, such as `feat-login`.
+- **Template version** — the version in the title of `workspace.md`, such
+  as `v0.1.0`: the template the workspace was copied from. Upgrading
+  replaces `scripts/` and `references/` with those of a newer version.
 - **Workspace** — this directory, copied from the template. It holds the
   scripts, the bare clones, the tasks, the branch checkouts and the
   archive. It is not a git repository.

@@ -9,7 +9,8 @@ The source of a workspace scaffold, not the workspace itself. Users copy
 `template/` into an empty folder with gitpick (command in `README.md`).
 Everything that ships lives under `template/`; the repo root holds only the
 tour (`README.md`), the test, and editor config. The product is bash; there
-is no package.json.
+is no package.json. The template's version is the title of
+`template/references/workspace.md`; see "Versioning" below.
 
 Four docs, each with its own job, plus a stub:
 
@@ -100,6 +101,28 @@ Use the glossary in `template/references/workspace-glossary.md` exactly:
 task, task folder name, slug, scope, env branch, branch checkout, landed,
 retire, plan link, shared files, lifecycle hook. Env branches are never
 tasks: `task-create` refuses them and points to `branch-add`.
+
+## Versioning
+
+The template has one version, the title of
+`template/references/workspace.md`, such as `# Workspace v0.1.0`. There is
+no CHANGELOG; git log is the history.
+
+- **Bump in the same commit.** Any change under `template/` bumps that
+  title. Changes only outside it (`README.md`, `test/`, `.github/`, editor
+  config) do not.
+- **MAJOR** (MINOR while below `v1.0.0`): a layout change; a command,
+  option, exit code, stdout payload or hook variable removed or changed in
+  meaning; agent rules in `template/CLAUDE.md` or the generated task
+  `CLAUDE.md` that existing tasks don't follow.
+- **MINOR**: a new command, option, hook or doc section; a raised minimum
+  bash or git version.
+- **PATCH**: fixes and wording.
+- **Breaking changes** take `!` in the subject and a `BREAKING CHANGE:`
+  footer that tells users what to do on upgrade, including any fix for
+  existing tasks.
+- **Never tag by hand.** `.github/workflows/tag-version.yml` tags `vX.Y.Z`
+  on `main` when the title's version has no tag yet.
 
 ## Commits
 

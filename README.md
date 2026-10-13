@@ -11,7 +11,8 @@ all of it.
 It is:
 
 - **A copied scaffold:** a folder layout plus ten bash scripts that you
-  copy once and then own.
+  copy once and then own. On upgrade, only `scripts/` and `references/`
+  are replaced.
 - **One task, one branch across repositories:** a task folder holds a
   worktree of each repository on the same branch, plus its notes and plans.
 - **An agent-friendly layout:** one session started in the task folder sees
@@ -66,6 +67,9 @@ workspace:
 bunx gitpick acfatah/worktree-workspace/tree/main/template .
 ```
 
+To pin a version, put its tag, such as `v0.1.0`, in place of `main`; see
+[Versioning](#versioning).
+
 If the copy did not preserve executable bits, run `chmod +x scripts/*` once.
 The scripts need bash 3.2 and git 2.23 or newer; `gh` is optional.
 
@@ -104,7 +108,7 @@ project-root/               # a plain folder
         └── server/         # Worktree.
 ```
 
-The [full layout](template/references/workspace.md#workspace) lists every
+The [full layout](template/references/workspace.md) lists every
 file the workspace and each task folder hold.
 
 In this repository the same tree lives under `template/`, which is what
@@ -398,69 +402,44 @@ Rules:
   not, and what I still need to do.
 ```
 
+## Versioning
+
+The template has one version, in the title of
+[template/references/workspace.md](template/references/workspace.md). A
+workspace's own `references/workspace.md` therefore says which version it
+was copied from. Every change to `template/` bumps it, and each version is
+tagged `vX.Y.Z`.
+
+There is no changelog; the git history of `template/` is the record. A
+breaking change is marked `!` and carries a `BREAKING CHANGE:` footer with
+the steps to follow. The bump rules are in
+[Version and upgrades](template/references/workspace.md#version-and-upgrades).
+
 ## Upgrading a Workspace
 
 The workspace is copied, not installed, so it never updates itself. You
-upgrade by copying the parts that ship from the template and leaving the
-parts you own alone.
+upgrade by replacing the parts the template owns, `scripts/` and
+`references/`, merging the root `CLAUDE.md` and `.vscode/settings.json` by
+hand, and leaving everything else alone. Existing tasks keep their
+generated files unless a breaking change says otherwise.
 
-### Steps
-
-1. **Read what changed** in the
-   [history of `template/`](https://github.com/acfatah/worktree-workspace/commits/main/template).
-   Commits marked `!`, such as `feat(scripts)!:`, are breaking.
-2. **Fetch the new template** into a temporary folder outside the
-   workspace:
-
-   ```bash
-   tmp=$(mktemp -d)
-   bunx gitpick acfatah/worktree-workspace/tree/main/template "$tmp/template"
-   ```
-
-3. **Replace `scripts/` and `references/` completely.** Remove them, then
-   copy the new ones, so a script deleted upstream goes too. Run this from
-   the workspace root:
-
-   ```bash
-   rm -rf scripts references
-   cp -R "$tmp/template/scripts" "$tmp/template/references" .
-   chmod +x scripts/*
-   ```
-
-4. **Diff and merge** the root `CLAUDE.md` and `.vscode/settings.json`.
-   They may hold your own edits, so never overwrite them:
-
-   ```bash
-   diff "$tmp/template/CLAUDE.md" CLAUDE.md
-   diff "$tmp/template/.vscode/settings.json" .vscode/settings.json
-   ```
-
-5. **Leave everything else alone:** `README.md`, `workspace.conf`,
-   `repos/`, `tasks/`, `branches/`, `archive/`, `docs/` and `shared/` are
-   yours. Then remove the temporary folder: `rm -rf "$tmp"`.
-
-### Existing Tasks
-
-Existing tasks keep the `CLAUDE.md` and `.claude/settings.json` that the
-old `task-create` wrote; only new tasks get the new ones. If the
-difference matters for a task, edit those two files by hand, or retire the
-task and create it again.
+The commands and the full list of what to keep are in
+[Upgrade steps](template/references/workspace.md#upgrade-steps).
 
 ### Letting an Agent Upgrade
 
-Start your agent in the workspace root and paste this prompt, with your
-own value in place of the placeholder:
+Start your agent in the workspace root and paste this prompt:
 
 ```text
-Upgrade this worktree workspace to the latest template. Follow
-"Upgrading a Workspace" in the workspace guide at
-https://github.com/acfatah/worktree-workspace#upgrading-a-workspace
-
-- Last upgrade or scaffold: <date | commit>
+Upgrade this worktree workspace to the latest template version. Follow
+"Version and upgrades" in the template's reference at
+https://github.com/acfatah/worktree-workspace/blob/main/template/references/workspace.md
+The version this workspace has is in the title of its own
+references/workspace.md.
 
 Rules:
-- Read the history of template/ since that point and summarise the
-  breaking changes (commits marked `!`) before changing anything.
+- Read the history of template/ since that version and summarise the
+  breaking changes (BREAKING CHANGE footers) before changing anything.
 - Replace scripts/ and references/ completely from a fresh template
   fetched into a temporary folder.
 - Show me the diff of the root CLAUDE.md and .vscode/settings.json and

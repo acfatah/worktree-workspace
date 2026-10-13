@@ -1,4 +1,4 @@
-# Workspace
+# Workspace v0.1.0
 
 One bare clone per repository, and one folder per task holding a worktree of
 every repository the task touches, all on the same branch. Notes and plans
@@ -568,3 +568,71 @@ Do not rely on auto-memory for anything the next task needs.
 Tip: `autoMemoryDirectory` moves auto-memory to a folder of your choice. Set
 it in your user settings, or by hand in a task's `.claude/settings.json`, to
 share one memory folder across tasks. The template does not set it.
+
+## Version and upgrades
+
+The version in this file's title, such as `v0.1.0`, is the template version
+the workspace was copied from. It covers everything the template ships:
+`scripts/`, `references/`, the root `CLAUDE.md` and `.vscode/settings.json`.
+There is no `--version` option; read the title. A title without a version
+means a copy from before `v0.1.0`. Each version is a git tag, `vX.Y.Z`, in
+the template repository.
+
+| Bump | When |
+| --- | --- |
+| MAJOR (MINOR while below `v1.0.0`) | Breaking: the layout changes; a command, option, exit code, stdout payload or hook variable is removed or changes meaning; or the agent rules change in a way existing tasks don't follow |
+| MINOR | Additions: a new command, option, hook or section; a raised minimum bash or git version |
+| PATCH | Fixes and wording |
+
+**What changed between two versions.** Compare the two tags on GitHub, or
+in a clone of the template repository:
+
+```bash
+git log v0.1.0..v0.2.0 -- template                 # every change
+git log --grep 'BREAKING CHANGE' v0.1.0..v0.2.0    # upgrade steps only
+```
+
+A breaking commit is marked `!`, such as `feat(scripts)!:`, and ends with a
+`BREAKING CHANGE:` footer that says what to do.
+
+### Upgrade steps
+
+Run these from the workspace root, with the version you want in place of
+`vX.Y.Z`. Use `main` instead of a tag for the latest unreleased state.
+
+1. **Read what changed** between your version and the new one, as above.
+2. **Fetch the new template** into a temporary folder outside the
+   workspace:
+
+   ```bash
+   tmp=$(mktemp -d)
+   bunx gitpick acfatah/worktree-workspace/tree/vX.Y.Z/template "$tmp/template"
+   ```
+
+3. **Replace `scripts/` and `references/` completely.** They are
+   template-owned. Remove them first, so a script deleted upstream goes too:
+
+   ```bash
+   rm -rf scripts references
+   cp -R "$tmp/template/scripts" "$tmp/template/references" .
+   chmod +x scripts/*
+   ```
+
+4. **Diff and merge by hand** the root `CLAUDE.md` and
+   `.vscode/settings.json`. They may hold your own edits, so never
+   overwrite them:
+
+   ```bash
+   diff "$tmp/template/CLAUDE.md" CLAUDE.md
+   diff "$tmp/template/.vscode/settings.json" .vscode/settings.json
+   ```
+
+5. **Follow each `BREAKING CHANGE:` footer** between the two versions.
+6. **Leave everything else alone:** `README.md`, `workspace.conf`,
+   `repos/`, `tasks/`, `branches/`, `archive/`, `docs/` and `shared/` are
+   yours. Then remove the temporary folder: `rm -rf "$tmp"`.
+
+**Existing tasks** keep the `CLAUDE.md` and `.claude/settings.json` that
+the old `task-create` wrote; only new tasks get the new ones. A
+`BREAKING CHANGE:` footer says when an existing task needs a fix. Edit
+those two files by hand, or retire the task and create it again.
