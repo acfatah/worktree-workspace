@@ -33,8 +33,9 @@ With no <task>, retires the task holding the current directory.
 Nothing is removed until every worktree passes and every pre-retire hook
 succeeds. A hook may run again on a re-run, so hooks must be safe to repeat.
 Plan symlinks are replaced with real copies, because Claude Code deletes
-~/.claude/plans/ files after 30 days. Remote branches are left alone: that
-is your host'"'"'s delete-on-merge job.'
+~/.claude/plans/ files older than its cleanupPeriodDays setting (default
+30 days). Remote branches are left alone: that is your host'"'"'s
+delete-on-merge job.'
 
 force=0
 fetch=1

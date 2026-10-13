@@ -96,8 +96,9 @@ destination unchanged.
 
 `scripts/task-retire` replaces every link with a real copy of its target
 before it archives the task, because Claude Code deletes plan-mode files
-after 30 days. As a safety net, it also copies a worktree's own non-empty
-`.claude/plans/` into `tasks/<task>/.claude/plans/<repo>/` first.
+older than its `cleanupPeriodDays` setting (default 30 days). As a safety
+net, it also copies a worktree's own non-empty `.claude/plans/` into
+`tasks/<task>/.claude/plans/<repo>/` first.
 
 ## One task per unit of work
 
