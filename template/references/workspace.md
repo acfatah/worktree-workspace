@@ -1,4 +1,4 @@
-# Workspace v0.1.0
+# Workspace v0.2.0
 
 One bare clone per repository, and one folder per task holding a worktree of
 every repository the task touches, all on the same branch. Notes and plans
@@ -20,6 +20,7 @@ workspace/                  # a plain folder, not a git repository
 │   │   └── api/
 │   └── dev/                # branch checkout: development server
 ├── docs/                   # cross-task notes, specs, diagrams
+├── issues/                 # bugs, ideas and tasks for every repository
 ├── references/             # this guide and the glossary; replaced on upgrade
 ├── repos/<repo>.git/       # bare clone of each repository
 ├── scripts/                # the ten commands below
@@ -29,7 +30,7 @@ workspace/                  # a plain folder, not a git repository
 │       ├── CLAUDE.md       # generated: the branch, where notes go
 │       ├── NOTES.md        # generated stub
 │       ├── .claude/plans/  # this task's plan links
-│       ├── .claude/settings.json  # generated: reach docs/ and scripts/
+│       ├── .claude/settings.json  # generated: reach issues/, scripts/ and more
 │       ├── drafts/         # on first use: drafts for you to read
 │       ├── generated/      # on first use: outputs worth keeping
 │       ├── app/            # worktree of repos/app.git
@@ -494,6 +495,148 @@ Anything that stabilises belongs in a repository, as documentation or an
 ADR. Claude's own memory and session history are not part of the folder;
 see "Claude state per task".
 
+## Issues
+
+`issues/` holds the workspace's issues: bugs, ideas and follow-ups noticed
+while working, for any repository or for the workspace itself. One folder
+serves every task, with one id counter. Issues outlive tasks:
+`task-retire` leaves them alone, as it leaves `docs/`.
+
+This section is the source of truth for files in `issues/`. It matches the
+file format of the `issue-tracker` skill, v1.1.0, so the skill works here
+unchanged; no skill is needed to follow it. A skill may add workflow, such
+as triage, milestones or sub-issue mirrors, but never changes the shape of
+a file here. On conflict, this section wins.
+
+### Folders
+
+```
+issues/
+├── MILESTONES.md   # optional: one "## <name>" section per milestone
+├── triage/         # captured, not yet reviewed
+├── open/           # accepted, waiting for work
+├── in-progress/    # being worked on
+├── blocked/        # waiting on something else; say what in Notes
+├── closed/         # finished, dropped, or moved to GitHub
+└── security/       # private; see "Security issues" below
+```
+
+- **The folder is the status.** Move a file to change its status. Only
+  files in `security/` carry a `status:` field.
+- Create each folder when its first issue needs it.
+
+### Issue files
+
+Name each file `NNNN-slug.md`, such as `0007-login-fails-on-empty-password.md`:
+
+- **`NNNN`** is a zero-padded counter, shared by every folder including
+  `closed/` and `security/`. The next number is the highest one in use,
+  plus 1. Numbers are never reused.
+- **Check after writing.** Create issues one at a time. Then list `NNNN-*`
+  files across all folders; if another file has your number, rename yours
+  to the next free number, update its `id`, and check again.
+- **The slug** is 2–5 lowercase words from the title, joined with hyphens.
+
+Every file starts with the same frontmatter. Keep every field; leave unused
+ones empty. Get dates from `date +%F`.
+
+```yaml
+---
+id: 0007
+title: Login fails on empty password
+type: bug
+priority: medium
+labels: [repo:app]
+milestone:
+parent:
+created: 2026-10-13
+updated: 2026-10-13
+github:
+resolution:
+closed:
+---
+```
+
+| Field | Required | Values |
+| --- | --- | --- |
+| `id` | yes | The number in the file name. |
+| `title` | yes | Short and specific, no trailing period. |
+| `type` | yes | `bug`, `feature`, `idea`, `feedback`, `task`, `chore`, `docs`, `refactor`, `question` or `security`. May stay empty in `triage/`. |
+| `priority` | no | `low`, `medium` or `high`. Set during triage. |
+| `labels` | no | Free-form list, plus `repo:<name>` labels; see below. |
+| `milestone` | no | A milestone name from `MILESTONES.md`. |
+| `parent` | no | The `id` of the parent issue, for a sub-issue. |
+| `created` | yes | `YYYY-MM-DD`, set once. |
+| `updated` | yes | `YYYY-MM-DD`, set on every change, including moves. |
+| `github` | no | The GitHub issue URL, once promoted. |
+| `resolution` | when closed | `done`, `duplicate`, `wont-fix`, `invalid` or `moved`. |
+| `closed` | when closed | `YYYY-MM-DD` the issue was closed. |
+
+The body uses the sections that apply: `## Summary`, `## What happens`,
+`## Expected`, `## Where`, `## How to reproduce`, `## Suggested fix`,
+`## Steps`, `## Acceptance criteria` and `## Notes`, with one dated line per
+note.
+
+### Repositories and tasks
+
+- **`repo:<name>` labels** name the repositories an issue concerns, such as
+  `labels: [repo:app, repo:api]`. `<name>` is the bare clone's name, as in
+  `repos/<name>.git`. No `repo:` label means the issue concerns the
+  workspace itself. Moving an issue to another repository is a label edit.
+- **Per-repository view:** `grep -l 'repo:app' issues/*/*.md`.
+- **Tasks link by id.** The issue's Notes name the task folder, such as
+  `tasks/feat-login`; the task's `NOTES.md` names the issue id, such as
+  `0007`. Ids are stable; paths change as issues move.
+
+### Lifecycle
+
+| Status | Meaning | Moves to |
+| --- | --- | --- |
+| `triage` | Captured, not reviewed. | `open`, `closed` |
+| `open` | Accepted, waiting for work. | `in-progress`, `closed` |
+| `in-progress` | Being worked on. | `blocked`, `closed`, `open` |
+| `blocked` | Waiting on something; say what in Notes. | `open`, `in-progress` |
+| `closed` | Finished or dropped; has a `resolution`. | `open` (reopen) |
+
+- **Capture:** an agent that notices an issue unrelated to its task
+  mentions it in one line and writes it to `triage/` only if you agree,
+  with what it knows now: path and line, error text, how it found it.
+  Asked to log an issue, it writes to `triage/` directly.
+- **Close:** set `resolution`, `closed` and `updated`, then move the file
+  to `closed/`. An agent closes an issue only with your agreement.
+- **Reopen:** move the file to `open/`, clear `resolution` and `closed`,
+  and add a Notes line saying why.
+
+### Security issues
+
+- **Store them in `issues/security/` only**, as a flat folder. Each file
+  carries a `status:` field (`triage`, `open`, `in-progress`, `blocked`,
+  `closed`) in place of a status folder. They share the id counter.
+- **They stay private.** Never copy `security/` into a repository, and
+  mention them by id only in commits, PRs and public issues until fixed.
+- **Never a GitHub issue.** Report one as a private security advisory in
+  the repository's Security tab.
+
+### Promoting to GitHub
+
+An issue moves to GitHub only on your request, and an agent asks before
+every step that creates something there.
+
+1. **Pick the repository** from the issue's `repo:` label, and read its
+   origin: `git -C repos/<name>.git remote get-url origin`. With several
+   `repo:` labels, choose one repository, or create one GitHub issue per
+   repository. With none, choose one.
+2. **Create the issue** without the `repo:` labels and without any
+   `## Sub-issues` section, since local ids mean nothing on GitHub:
+
+   ```bash
+   gh issue create -R <owner>/<repo> --title "<title>" --body-file <body.md>
+   ```
+
+3. **Close the local file:** set `github: <issue-url>`,
+   `resolution: moved`, `closed` and `updated`, then move it to `closed/`.
+   GitHub is the source of truth for that issue from then on.
+
 ## Claude Code settings
 
 Claude Code reads project settings only from the folder a session starts
@@ -507,17 +650,20 @@ missing, and never overwrites it:
 ```json
 {
   "permissions": {
-    "additionalDirectories": ["../../docs", "../../.claude/plans", "../../references"],
+    "additionalDirectories": [
+      "../../docs", "../../issues", "../../.claude/plans", "../../references"
+    ],
     "allow": ["Bash(../../scripts/*)"]
   }
 }
 ```
 
-- **What it grants:** a task session can edit cross-task notes in `docs/`
-  and plan links in `.claude/plans/`, read this reference and the glossary
-  in `references/`, and run `../../scripts/<command>`, without a prompt
-  each time. The rule matches the command as typed, so it does not cover an
-  absolute path or `bash ../../scripts/<command>`.
+- **What it grants:** a task session can edit cross-task notes in `docs/`,
+  issues in `issues/` and plan links in `.claude/plans/`, read this
+  reference and the glossary in `references/`, and run
+  `../../scripts/<command>`, without a prompt each time. The rule matches
+  the command as typed, so it does not cover an absolute path or
+  `bash ../../scripts/<command>`.
 - **Trust it once per task.** Claude ignores these grants until the folder
   is trusted. A new task shows the trust prompt on its first interactive
   start; accept it. A headless `claude -p` in a task that was never
@@ -547,7 +693,8 @@ session starts in when that folder is not a git repository. Each
   `claude --resume <session-id>` still finds one from any folder.
 - **Approvals** saved from a prompt ("don't ask again") are stored per
   project, so a new task asks again. The generated `.claude/settings.json`
-  already covers `docs/`, `.claude/plans/`, `references/` and `scripts/`.
+  already covers `docs/`, `issues/`, `.claude/plans/`, `references/` and
+  `scripts/`.
 
 A session started in a worktree, `tasks/<task>/<repo>/`, is inside a git
 repository. Claude keys its auto-memory on that repository, so every task's
@@ -560,6 +707,7 @@ Put state that should outlast a task somewhere that lasts:
 | --- | --- |
 | Knowledge about a product: conventions, decisions, gotchas | the repository's `CLAUDE.md` or docs, committed |
 | Notes and specs that span tasks | `docs/` |
+| Bugs, ideas and follow-ups | `issues/` |
 | Personal preferences | `~/.claude/CLAUDE.md` |
 | Standing permissions | user settings (`~/.claude/settings.json`), or the task's `.claude/settings.json` |
 
@@ -629,10 +777,13 @@ Run these from the workspace root, with the version you want in place of
 
 5. **Follow each `BREAKING CHANGE:` footer** between the two versions.
 6. **Leave everything else alone:** `README.md`, `workspace.conf`,
-   `repos/`, `tasks/`, `branches/`, `archive/`, `docs/` and `shared/` are
-   yours. Then remove the temporary folder: `rm -rf "$tmp"`.
+   `repos/`, `tasks/`, `branches/`, `archive/`, `docs/`, `issues/` and
+   `shared/` are yours. Then remove the temporary folder: `rm -rf "$tmp"`.
 
 **Existing tasks** keep the `CLAUDE.md` and `.claude/settings.json` that
 the old `task-create` wrote; only new tasks get the new ones. A
 `BREAKING CHANGE:` footer says when an existing task needs a fix. Edit
-those two files by hand, or retire the task and create it again.
+those two files by hand, or retire the task and create it again. For
+example, tasks created before `v0.2.0` lack `"../../issues"` in
+`additionalDirectories`, so their sessions ask before writing an issue;
+add it by hand.

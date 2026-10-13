@@ -95,6 +95,7 @@ project-root/               # a plain folder
 ├── archive/                # Folders of retired tasks.
 ├── branches/               # Optional branch checkouts, made on request.
 ├── docs/                   # Cross-task notes, specs and diagrams.
+├── issues/                 # Bugs and ideas, for every repository.
 ├── references/             # Script reference and glossary.
 ├── repos/
 │   ├── client.git/         # Bare clone.
@@ -163,9 +164,10 @@ repository of the task.
 
 Keep the task's working material, such as notes and plans, in the task
 folder. It sits above the worktrees, so it survives them, and step 6
-archives it. Notes that span tasks go in `docs/`. Commit the plans that
-stabilise into the repository, as documentation or an ADR. `CLAUDE.md` has
-the full placement table, and
+archives it. Notes that span tasks go in `docs/`, and
+[issues](template/references/workspace.md#issues) in `issues/`. Commit the
+plans that stabilise into the repository, as documentation or an ADR.
+`CLAUDE.md` has the full placement table, and
 [Task notes](template/references/workspace.md#task-notes) lists what a
 task folder holds.
 
@@ -444,8 +446,8 @@ Rules:
   fetched into a temporary folder.
 - Show me the diff of the root CLAUDE.md and .vscode/settings.json and
   wait for my approval before merging either one.
-- Never touch repos/, tasks/, branches/, archive/, docs/, shared/,
-  README.md or workspace.conf.
+- Never touch repos/, tasks/, branches/, archive/, docs/, issues/,
+  shared/, README.md or workspace.conf.
 - Finish with `scripts/task-list` and a summary of what changed and
   anything I still need to do, such as updating existing tasks.
 ```

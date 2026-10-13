@@ -306,14 +306,14 @@ check "a new task branch has no upstream" "$( [ -z "$(upstream "$T/app")" ]; ech
 check "task-create writes CLAUDE.md, NOTES.md and .claude/plans/" \
   "$( [ -f "$T/CLAUDE.md" ] && [ -f "$T/NOTES.md" ] && [ -d "$T/.claude/plans" ] \
       && grep -q 'feat/login' "$T/CLAUDE.md" && grep -q 'drafts/' "$T/CLAUDE.md" \
-      && grep -q 'generated/' "$T/CLAUDE.md"; echo $? )"
+      && grep -q 'generated/' "$T/CLAUDE.md" && grep -q 'issues/' "$T/CLAUDE.md"; echo $? )"
 
 S=$T/.claude/settings.json
-check "task-create writes .claude/settings.json granting docs, plans, references and scripts" \
+check "task-create writes .claude/settings.json granting docs, issues, plans, references and scripts" \
   "$( [ -f "$S" ] && grep -qF '"../../docs"' "$S" && grep -qF '"../../.claude/plans"' "$S" \
-      && grep -qF '"../../references"' "$S" \
+      && grep -qF '"../../references"' "$S" && grep -qF '"../../issues"' "$S" \
       && grep -qF '"Bash(../../scripts/*)"' "$S" && [ -d "$WS/docs" ] \
-      && [ -d "$WS/.claude/plans" ]; echo $? )"
+      && [ -d "$WS/issues" ] && [ -d "$WS/.claude/plans" ]; echo $? )"
 
 printf 'my notes\n' >> "$T/NOTES.md"
 printf '{}\n' > "$S"
