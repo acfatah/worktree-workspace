@@ -35,33 +35,26 @@ After running the Quick Start command and adding two repositories, the
 workspace looks like this:
 
 ```
-project-root/               # a plain folder, not a git repository
+project-root/               # a plain folder
 ├── CLAUDE.md               # Placement rules for the task workflow.
-├── README.md               # Yours: describe the workspace.
-├── .claude/plans/          # Cross-task plan links.
-├── archive/                # Notes and plans of retired tasks.
+├── archive/                # Folders of retired tasks.
 ├── branches/               # Optional branch checkouts, made on request.
-│   ├── main/               # Production.
-│   │   ├── client/
-│   │   └── server/
-│   └── dev/                # Development server.
 ├── docs/                   # Cross-task notes, specs and diagrams.
-├── references/             # Workspace guide, script reference and glossary.
+├── references/             # Script reference and glossary.
 ├── repos/
 │   ├── client.git/         # Bare clone.
 │   └── server.git/         # Bare clone.
 ├── scripts/                # Task lifecycle, repo sync, and status.
 ├── shared/<repo>/          # Ignored local files (.env) for new worktrees.
-├── tasks/
-│   └── feat-login/         # A task, on branch feat/login.
-│       ├── CLAUDE.md       # Generated: the branch, where notes go.
-│       ├── NOTES.md        # Generated stub.
-│       ├── .claude/plans/  # This task's plan links.
-│       ├── .claude/settings.json  # Generated: reach docs/ and scripts/.
-│       ├── client/         # Worktree.
-│       └── server/         # Worktree.
-└── workspace.conf          # Optional; created when you need it.
+└── tasks/
+    └── feat-login/         # A task, on branch feat/login.
+        ├── NOTES.md        # The task's notes, beside its plans.
+        ├── client/         # Worktree.
+        └── server/         # Worktree.
 ```
+
+The [full layout](template/references/workspace.md#workspace) lists every
+file the workspace and each task folder hold.
 
 In this repository the same tree lives under `template/`, which is what
 `gitpick` copies. The workspace's `references/workspace.md` documents every
@@ -83,53 +76,43 @@ workspace.
 - Run: `scripts/task-create <branch> <repo>...`, for example
   `scripts/task-create feat/login client server`.
 - It creates `tasks/feat-login/` with a worktree of each repository on
-  `feat/login`, plus `CLAUDE.md`, `NOTES.md`, `.claude/plans/` and
-  `.claude/settings.json`.
+  `feat/login`, plus the task's own files; see
+  [task-create](template/references/workspace.md#task-create).
 - It prints the path, so `cd "$(scripts/task-create feat/login client)"`
   puts you straight into the task.
 - Need another repository later? `scripts/task-add feat-login server`.
 
 ### 2. Prepare Branch Resources (Optional)
 
-Put this in `.workflow/post-create` in the repository and commit it, so
-every worktree of that repository gets the same treatment and teammates
-inherit it. The hook runs inside the new worktree, after the `shared/`
-files are copied, with the task and branch details in the environment.
-`${WORKFLOW_REPO}_${WORKFLOW_SLUG}` is the conventional name for a branch
-database.
+When each branch needs its own setup, such as a database, a dependency
+install or a port, write it as a `post-create` hook in `.workflow/` in the
+repository and commit it. Every worktree of that repository then gets the
+same treatment, and teammates inherit it. The hook runs inside the new
+worktree, after the `shared/` files are copied.
 
-```bash
-#!/usr/bin/env bash
-# .workflow/post-create
-set -euo pipefail
+The usual case is a branch database. Every worktree gets its own copy of
+`shared/<repo>/.env`, so the hook can create a database for the task and
+point that copy's `DATABASE_URL` at it, without touching any other task.
+Schema migrations on the branch then cannot break the others. A matching
+`pre-retire` hook drops the database when step 6 retires the task.
 
-if [ "$WORKFLOW_KIND" = task ]; then   # branch checkouts keep shared values
-  db="${WORKFLOW_REPO}_${WORKFLOW_SLUG}"
-  createdb "$db" 2>/dev/null || true
-  pg_dump --no-owner "${WORKFLOW_REPO}_dev" | psql --quiet "$db"
-  grep -v '^DATABASE_URL=' .env > .env.tmp 2>/dev/null || true
-  printf 'DATABASE_URL=postgres://localhost/%s\n' "$db" >> .env.tmp
-  mv .env.tmp .env
-fi
-```
-
-Every worktree gets its own copy of `shared/<repo>/.env`, so the hook
-rewrites `DATABASE_URL` for this task only; the scripts never edit `.env`
-themselves. A branch-specific database keeps schema migrations from
-breaking other branches. Tear it down in `.workflow/pre-retire`, which
-step 6 runs. The workspace's `references/workspace.md` has the full hook
-contract and the matching `pre-retire`.
+The reference has the
+[hook contract](template/references/workspace.md#lifecycle-hooks) and a
+[complete example](template/references/workspace.md#per-branch-values-in-env)
+of both hooks.
 
 ### 3. Plan in the Task Folder
 
 Start your agent in `tasks/<task>/`. One session then sees every
 repository of the task.
 
-Keep the task's working material in the task folder: notes in `NOTES.md`,
-plan links in `.claude/plans/`. It sits above the worktrees, so it
-survives them, and step 6 archives it. Notes that span tasks go in
-`docs/`. Commit the plans that stabilise into the repository, as
-documentation or an ADR. `CLAUDE.md` has the full placement table.
+Keep the task's working material, such as notes and plans, in the task
+folder. It sits above the worktrees, so it survives them, and step 6
+archives it. Notes that span tasks go in `docs/`. Commit the plans that
+stabilise into the repository, as documentation or an ADR. `CLAUDE.md` has
+the full placement table, and
+[Task notes](template/references/workspace.md#task-notes) lists what a
+task folder holds.
 
 Keep one task per unit of work.
 
@@ -152,17 +135,20 @@ After the PRs merge or close:
 
 - Run `scripts/task-retire` from inside the task, or
   `scripts/task-retire <task>` from anywhere.
-- It refuses if any worktree is dirty or holds commits that are on no
-  origin branch.
+- It checks every worktree first. If any could lose work, it lists the
+  problems and changes nothing.
 - It runs every `pre-retire` hook, removes the worktrees and their local
   branches, and moves the task folder to `archive/<task>/`. Plan links
   become real files on the way.
+- [task-retire](template/references/workspace.md#task-retire) lists the
+  checks and the options to override them.
 
 ### 7. Housekeeping
 
-- `scripts/task-list` shows every task and, per repository, whether it is
-  dirty, how far ahead or behind it is, its PR state, and whether it has
-  landed. A task where only some repositories landed shows `landed 1/2`.
+- `scripts/task-list` shows every task and the state of each repository,
+  including how far it has landed. A task where only some repositories
+  landed shows `landed 1/2`. See
+  [task-list](template/references/workspace.md#task-list) for the columns.
 - `scripts/task-prune` retires every task whose repositories have all
   landed. It is a dry run until you pass `--yes`.
 - `scripts/sync-repos` fetches every repository and fast-forwards the
@@ -184,8 +170,10 @@ The branch must already exist. `branches/` is created on the first
 `scripts/branch-remove <name>` removes one.
 
 `task-create` refuses an env branch such as `main` and points to
-`branch-add`, so `tasks/` only ever holds units of work. List other env
-branches in `workspace.conf` as `ENV_BRANCHES="main dev staging"`.
+`branch-add`, so `tasks/` only ever holds units of work. To change which
+branches count as env branches, set `ENV_BRANCHES` in `workspace.conf`;
+see [Env branches](template/references/workspace.md#env-branches) for the
+defaults.
 
 ## Effects on Claude Code
 
@@ -209,14 +197,16 @@ its state on the folder a session starts in. Starting Claude in
 | Session history | Per folder | Leaves `/resume` once the folder is archived | Use `claude --resume <session-id>` |
 | Saved approvals | Per project | Per task | Put standing permissions in settings files |
 
-The workspace `references/workspace.md` explains each row under "Claude
-Code settings" and "Claude state per task".
+The reference explains each row under
+[Claude Code settings](template/references/workspace.md#claude-code-settings),
+including the `git init` tip, and
+[Claude state per task](template/references/workspace.md#claude-state-per-task).
 
 ## Adopting an Existing Project
 
 The workspace replaces your existing clone; it does not wrap it. Create it
-next to the clone, never inside: the workspace must not be a git repository.
-A `ws-` prefix tells it apart from a regular clone at a glance.
+next to the clone, never inside it. A `ws-` prefix tells it apart from a
+regular clone at a glance.
 
 ```
 ~/work/acme/        # your existing clone; retire it at the end
@@ -276,7 +266,7 @@ A `ws-` prefix tells it apart from a regular clone at a glance.
    [Workflow Steps](#2-prepare-branch-resources-optional).
 7. **List your env branches** in `workspace.conf` if they differ from the
    defaults (see
-   [Env branch](template/references/workspace-glossary.md)).
+   [Env branches](template/references/workspace.md#env-branches)).
 8. **Recreate local git config** that lived only in the old clone, such as
    `core.hooksPath` or a per-repository `user.email`, on
    `repos/<repo>.git`. Its worktrees read that config.

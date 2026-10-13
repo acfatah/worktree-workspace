@@ -25,6 +25,15 @@ Four docs, each with its own job, plus a stub:
 `template/README.md` is a short stub the user rewrites to describe their own
 workspace; it only points to the reference. Keep reference content out of it.
 
+**The README guides; the reference specifies.** Every fact about behaviour
+has one owner, `template/references/workspace.md`: options, checks, exit
+codes, the directory tree, hook variables, defaults. The README explains the
+workflow and its trade-offs at a level that stays true when details change,
+and links to the reference section for specifics. Do not copy lists, trees
+or option sets into the README; summarise and link. When a script's
+behaviour changes, update the reference, then check that the README's
+summary is still true.
+
 ## Commands
 
 ```bash
