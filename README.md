@@ -28,7 +28,7 @@ It isn't:
   and the scripts run without any agent. See
   [Effects on Claude Code](#effects-on-claude-code).
 - **An installed tool:** there is no package and no auto-update. Upgrades
-  are manual.
+  are manual; see [Upgrading a Workspace](#upgrading-a-workspace).
 - **A monorepo or build tool:** it sets up no sparse checkout, shared
   install or build cache. See [Monorepos](#monorepos) for the cost.
 - **A wrapper around your existing clone:** it replaces the clone. See
@@ -396,6 +396,79 @@ Rules:
   branch checkout.
 - Finish with `scripts/task-list` and a summary of what moved, what did
   not, and what I still need to do.
+```
+
+## Upgrading a Workspace
+
+The workspace is copied, not installed, so it never updates itself. You
+upgrade by copying the parts that ship from the template and leaving the
+parts you own alone.
+
+### Steps
+
+1. **Read what changed** in the
+   [history of `template/`](https://github.com/acfatah/worktree-workspace/commits/main/template).
+   Commits marked `!`, such as `feat(scripts)!:`, are breaking.
+2. **Fetch the new template** into a temporary folder outside the
+   workspace:
+
+   ```bash
+   tmp=$(mktemp -d)
+   bunx gitpick acfatah/worktree-workspace/tree/main/template "$tmp/template"
+   ```
+
+3. **Replace `scripts/` and `references/` completely.** Remove them, then
+   copy the new ones, so a script deleted upstream goes too. Run this from
+   the workspace root:
+
+   ```bash
+   rm -rf scripts references
+   cp -R "$tmp/template/scripts" "$tmp/template/references" .
+   chmod +x scripts/*
+   ```
+
+4. **Diff and merge** the root `CLAUDE.md` and `.vscode/settings.json`.
+   They may hold your own edits, so never overwrite them:
+
+   ```bash
+   diff "$tmp/template/CLAUDE.md" CLAUDE.md
+   diff "$tmp/template/.vscode/settings.json" .vscode/settings.json
+   ```
+
+5. **Leave everything else alone:** `README.md`, `workspace.conf`,
+   `repos/`, `tasks/`, `branches/`, `archive/`, `docs/` and `shared/` are
+   yours. Then remove the temporary folder: `rm -rf "$tmp"`.
+
+### Existing Tasks
+
+Existing tasks keep the `CLAUDE.md` and `.claude/settings.json` that the
+old `task-create` wrote; only new tasks get the new ones. If the
+difference matters for a task, edit those two files by hand, or retire the
+task and create it again.
+
+### Letting an Agent Upgrade
+
+Start your agent in the workspace root and paste this prompt, with your
+own value in place of the placeholder:
+
+```text
+Upgrade this worktree workspace to the latest template. Follow
+"Upgrading a Workspace" in the workspace guide at
+https://github.com/acfatah/worktree-workspace#upgrading-a-workspace
+
+- Last upgrade or scaffold: <date | commit>
+
+Rules:
+- Read the history of template/ since that point and summarise the
+  breaking changes (commits marked `!`) before changing anything.
+- Replace scripts/ and references/ completely from a fresh template
+  fetched into a temporary folder.
+- Show me the diff of the root CLAUDE.md and .vscode/settings.json and
+  wait for my approval before merging either one.
+- Never touch repos/, tasks/, branches/, archive/, docs/, shared/,
+  README.md or workspace.conf.
+- Finish with `scripts/task-list` and a summary of what changed and
+  anything I still need to do, such as updating existing tasks.
 ```
 
 ## Glossary
