@@ -20,6 +20,9 @@ in its repository.
   each repository's default branch plus `main`, `master`, `dev`,
   `develop`, `staging` and `production`. `task-create` refuses one; check
   it out with `branch-add`. Its local branch is never deleted.
+- **Issue** — a bug, idea or follow-up recorded as one file in `issues/`
+  at the workspace root, named for its repositories by `repo:<name>`
+  labels. It outlives tasks; see "Issues" in `workspace.md`.
 - **Landed** — a repository's branch whose work has reached the default
   branch: its PR is merged, it is merged into the default branch, or its
   remote branch is gone. A task has landed when every repository has.

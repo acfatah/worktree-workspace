@@ -24,6 +24,7 @@ _ws_lib_dir=$(cd -P "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
   ARCHIVE_DIR=$WORKSPACE_ROOT/archive
   SHARED_DIR=$WORKSPACE_ROOT/shared
   DOCS_DIR=$WORKSPACE_ROOT/docs
+  ISSUES_DIR=$WORKSPACE_ROOT/issues
   WORKSPACE_CONF=$WORKSPACE_ROOT/workspace.conf
 }
 
@@ -486,7 +487,8 @@ ws_task_branch() {
 ws_write_task_files() {
   local task=$1 branch=$2 dir
   dir=$(ws_task_dir "$task")
-  mkdir -p "$dir/.claude/plans" "$DOCS_DIR" "$WORKSPACE_ROOT/.claude/plans"
+  mkdir -p "$dir/.claude/plans" "$DOCS_DIR" "$ISSUES_DIR" \
+           "$WORKSPACE_ROOT/.claude/plans"
 
   if [ ! -e "$dir/CLAUDE.md" ]; then
     cat > "$dir/CLAUDE.md" <<EOT
@@ -501,6 +503,7 @@ branch.
 - Drafts for the user to read: \`drafts/\`
 - Generated files worth keeping: \`generated/\`
 - Cross-task notes: \`../../docs/\`
+- Issues: \`../../issues/\`
 EOT
     log_info "wrote    $(ws_rel "$dir/CLAUDE.md")"
   fi
@@ -520,7 +523,9 @@ EOT
     cat > "$dir/.claude/settings.json" <<'EOT'
 {
   "permissions": {
-    "additionalDirectories": ["../../docs", "../../.claude/plans", "../../references"],
+    "additionalDirectories": [
+      "../../docs", "../../issues", "../../.claude/plans", "../../references"
+    ],
     "allow": ["Bash(../../scripts/*)"]
   }
 }

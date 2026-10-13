@@ -36,12 +36,13 @@ The task folder is not a git repository, which changes how git works there:
   `/code-review ultra` need a repository as the current directory. `cd` into
   the worktree first, and run one review per repository.
 
-The task's `.claude/settings.json` lets its session write `../../docs/` and
-`../../.claude/plans/`, read `../../references/` and run `../../scripts/`
-without prompting, once the task folder is trusted: accept the trust prompt
-on its first start. The root `.claude/settings.json` does not apply in task
-sessions; put shared settings in each task's file or in user settings. See
-"Claude Code settings" in `references/workspace.md`.
+The task's `.claude/settings.json` lets its session write `../../docs/`,
+`../../issues/` and `../../.claude/plans/`, read `../../references/` and
+run `../../scripts/` without prompting, once the task folder is trusted:
+accept the trust prompt on its first start. The root
+`.claude/settings.json` does not apply in task sessions; put shared
+settings in each task's file or in user settings. See "Claude Code
+settings" in `references/workspace.md`.
 
 Auto-memory and session history belong to the task folder: the next task
 does not see them, and retiring the task orphans them. Write anything worth
@@ -61,6 +62,7 @@ must outlive the branch is written somewhere else.
 | Generated files worth keeping: scripts, data, reports | `tasks/<task>/generated/` | the task's session | moves to `archive/<task>/` |
 | Plan links | `tasks/<task>/.claude/plans/` | the task's session | copied as real files into `archive/<task>/` |
 | Cross-task notes, specs, plans | `docs/`, `.claude/plans/` | every session | stays |
+| Issues: bugs, ideas, tasks noticed along the way | `issues/` | every session | stays |
 | Ignored local files, such as `.env` | `shared/<repo>/` | every new worktree of `<repo>` | stays |
 | A branch to run or review, such as `main` | `branches/<name>/`, via `scripts/branch-add` | that checkout only | `scripts/branch-remove` deletes it |
 | Branch setup: database, dependencies | `.workflow/` in the repository, committed | every worktree, via `post-create` | `pre-retire` tears it down |
@@ -84,6 +86,23 @@ so neither folder needs a gitignore or `info/exclude` entry.
   as scripts, data exports and reports. Promote a file into a repository
   and commit it once it earns a permanent place.
 - **Neither:** throwaway working files go in the session's scratchpad.
+
+## Issues
+
+Issues live in `issues/` at the workspace root, never in a worktree or a
+task folder. One folder serves every task and repository, with one id
+counter.
+
+- **Location wins over skills.** This overrides the location rule of any
+  issue-tracking skill, such as `issue-tracker`: skip its root detection
+  and its gitignore step.
+- **Format:** see "Issues" in `references/workspace.md`. It wins over any
+  skill on conflict. Without a skill, follow it directly.
+- **Repositories:** name them with `repo:<name>` labels, such as
+  `repo:app`. No `repo:` label means the issue concerns the workspace.
+- **Tasks:** link by issue id. Name the task folder in the issue's Notes,
+  and the issue id in the task's `NOTES.md`.
+- **`issues/security/` stays private:** never copy it into a repository.
 
 ## Plan links
 
