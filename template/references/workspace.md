@@ -507,16 +507,17 @@ missing, and never overwrites it:
 ```json
 {
   "permissions": {
-    "additionalDirectories": ["../../docs", "../../.claude/plans"],
+    "additionalDirectories": ["../../docs", "../../.claude/plans", "../../references"],
     "allow": ["Bash(../../scripts/*)"]
   }
 }
 ```
 
 - **What it grants:** a task session can edit cross-task notes in `docs/`
-  and plan links in `.claude/plans/`, and run `../../scripts/<command>`,
-  without a prompt each time. The rule matches the command as typed, so it
-  does not cover an absolute path or `bash ../../scripts/<command>`.
+  and plan links in `.claude/plans/`, read this reference and the glossary
+  in `references/`, and run `../../scripts/<command>`, without a prompt
+  each time. The rule matches the command as typed, so it does not cover an
+  absolute path or `bash ../../scripts/<command>`.
 - **Trust it once per task.** Claude ignores these grants until the folder
   is trusted. A new task shows the trust prompt on its first interactive
   start; accept it. A headless `claude -p` in a task that was never
@@ -546,7 +547,7 @@ session starts in when that folder is not a git repository. Each
   `claude --resume <session-id>` still finds one from any folder.
 - **Approvals** saved from a prompt ("don't ask again") are stored per
   project, so a new task asks again. The generated `.claude/settings.json`
-  already covers `docs/`, `.claude/plans/` and `scripts/`.
+  already covers `docs/`, `.claude/plans/`, `references/` and `scripts/`.
 
 A session started in a worktree, `tasks/<task>/<repo>/`, is inside a git
 repository. Claude keys its auto-memory on that repository, so every task's
