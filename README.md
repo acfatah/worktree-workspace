@@ -6,6 +6,57 @@ a worktree of every repository it touches, all on one branch, plus the
 task's notes and plans. One agent session, started in the task folder, sees
 all of it.
 
+## What This Is and What It Isn't
+
+It is:
+
+- **A copied scaffold:** a folder layout plus ten bash scripts that you
+  copy once and then own.
+- **One task, one branch across repositories:** a task folder holds a
+  worktree of each repository on the same branch, plus its notes and plans.
+- **An agent-friendly layout:** one session started in the task folder sees
+  every repository. Placement rules live in `CLAUDE.md`.
+- **A safe lifecycle:** `task-retire` checks for dirty or unpushed work
+  before it changes anything, and archives the notes. The commands are
+  idempotent and resumable.
+
+It isn't:
+
+- **A git or GitHub wrapper:** you still commit, push and open the PRs
+  yourself. `gh` is optional and only reads PR state.
+- **A Claude Code plugin:** it adds no hooks and changes no model setting,
+  and the scripts run without any agent. See
+  [Effects on Claude Code](#effects-on-claude-code).
+- **An installed tool:** there is no package and no auto-update. Upgrades
+  are manual; see [Upgrading a Workspace](#upgrading-a-workspace).
+- **A monorepo or build tool:** it sets up no sparse checkout, shared
+  install or build cache. See [Monorepos](#monorepos) for the cost.
+- **A wrapper around your existing clone:** it replaces the clone. See
+  [Adopting an Existing Project](#adopting-an-existing-project).
+- **A deploy or environment manager:** `branches/main` runs production
+  locally, but nothing deploys or provisions. Write any setup you need as
+  [lifecycle hooks](#2-prepare-branch-resources-optional).
+- **Claude Code's `--worktree`:** that gives one throwaway worktree per
+  session in one repository. This workspace gives one task folder across
+  repositories. Do not mix the two; see the
+  [Effects on Claude Code](#effects-on-claude-code) table.
+
+It is a good fit for:
+
+- **Work that spans repositories**, such as a client and a server change
+  that ship together.
+- **Several branches in flight at once**, side by side, without stashing.
+- **Agent sessions that need every repository** of a change.
+- **Per-branch databases and ports**, set up by hooks.
+
+It is a poor fit for:
+
+- **A one-line fix in a single repository:** a plain clone is quicker.
+- **Windows without bash:** the scripts need bash 3.2 or newer, for
+  example through WSL.
+- **A team that needs sparse checkouts** of a huge monorepo: every task is
+  a full checkout.
+
 ## Quick Start
 
 Create a new directory then run the following command to set up the
@@ -202,6 +253,22 @@ The reference explains each row under
 including the `git init` tip, and
 [Claude state per task](template/references/workspace.md#claude-state-per-task).
 
+## Compared With Alternatives
+
+**Plain clones and `git switch`** are simpler, with nothing to learn. But
+switching branches means stashing work and often reinstalling
+dependencies, and each repository stays separate. A task folder keeps
+branches side by side and groups the repositories of one change.
+
+**Generic worktree managers** are lighter and need no folder convention.
+Most of them handle one repository at a time. This workspace adds tasks
+that span repositories, notes that outlive the worktrees, a safety check
+before retiring, and detection of landed work.
+
+**Monorepo tooling such as Turborepo or Nx** is a complement, not a
+competitor. It owns builds and caching, while the workspace only owns
+checkouts. See [Monorepos](#monorepos) for the cost each task adds.
+
 ## Adopting an Existing Project
 
 The workspace replaces your existing clone; it does not wrap it. Create it
@@ -329,6 +396,79 @@ Rules:
   branch checkout.
 - Finish with `scripts/task-list` and a summary of what moved, what did
   not, and what I still need to do.
+```
+
+## Upgrading a Workspace
+
+The workspace is copied, not installed, so it never updates itself. You
+upgrade by copying the parts that ship from the template and leaving the
+parts you own alone.
+
+### Steps
+
+1. **Read what changed** in the
+   [history of `template/`](https://github.com/acfatah/worktree-workspace/commits/main/template).
+   Commits marked `!`, such as `feat(scripts)!:`, are breaking.
+2. **Fetch the new template** into a temporary folder outside the
+   workspace:
+
+   ```bash
+   tmp=$(mktemp -d)
+   bunx gitpick acfatah/worktree-workspace/tree/main/template "$tmp/template"
+   ```
+
+3. **Replace `scripts/` and `references/` completely.** Remove them, then
+   copy the new ones, so a script deleted upstream goes too. Run this from
+   the workspace root:
+
+   ```bash
+   rm -rf scripts references
+   cp -R "$tmp/template/scripts" "$tmp/template/references" .
+   chmod +x scripts/*
+   ```
+
+4. **Diff and merge** the root `CLAUDE.md` and `.vscode/settings.json`.
+   They may hold your own edits, so never overwrite them:
+
+   ```bash
+   diff "$tmp/template/CLAUDE.md" CLAUDE.md
+   diff "$tmp/template/.vscode/settings.json" .vscode/settings.json
+   ```
+
+5. **Leave everything else alone:** `README.md`, `workspace.conf`,
+   `repos/`, `tasks/`, `branches/`, `archive/`, `docs/` and `shared/` are
+   yours. Then remove the temporary folder: `rm -rf "$tmp"`.
+
+### Existing Tasks
+
+Existing tasks keep the `CLAUDE.md` and `.claude/settings.json` that the
+old `task-create` wrote; only new tasks get the new ones. If the
+difference matters for a task, edit those two files by hand, or retire the
+task and create it again.
+
+### Letting an Agent Upgrade
+
+Start your agent in the workspace root and paste this prompt, with your
+own value in place of the placeholder:
+
+```text
+Upgrade this worktree workspace to the latest template. Follow
+"Upgrading a Workspace" in the workspace guide at
+https://github.com/acfatah/worktree-workspace#upgrading-a-workspace
+
+- Last upgrade or scaffold: <date | commit>
+
+Rules:
+- Read the history of template/ since that point and summarise the
+  breaking changes (commits marked `!`) before changing anything.
+- Replace scripts/ and references/ completely from a fresh template
+  fetched into a temporary folder.
+- Show me the diff of the root CLAUDE.md and .vscode/settings.json and
+  wait for my approval before merging either one.
+- Never touch repos/, tasks/, branches/, archive/, docs/, shared/,
+  README.md or workspace.conf.
+- Finish with `scripts/task-list` and a summary of what changed and
+  anything I still need to do, such as updating existing tasks.
 ```
 
 ## Glossary
