@@ -309,8 +309,9 @@ check "task-create writes CLAUDE.md, NOTES.md and .claude/plans/" \
       && grep -q 'generated/' "$T/CLAUDE.md"; echo $? )"
 
 S=$T/.claude/settings.json
-check "task-create writes .claude/settings.json granting docs, plans and scripts" \
+check "task-create writes .claude/settings.json granting docs, plans, references and scripts" \
   "$( [ -f "$S" ] && grep -qF '"../../docs"' "$S" && grep -qF '"../../.claude/plans"' "$S" \
+      && grep -qF '"../../references"' "$S" \
       && grep -qF '"Bash(../../scripts/*)"' "$S" && [ -d "$WS/docs" ] \
       && [ -d "$WS/.claude/plans" ]; echo $? )"
 

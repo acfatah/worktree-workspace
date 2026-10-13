@@ -520,7 +520,7 @@ EOT
     cat > "$dir/.claude/settings.json" <<'EOT'
 {
   "permissions": {
-    "additionalDirectories": ["../../docs", "../../.claude/plans"],
+    "additionalDirectories": ["../../docs", "../../.claude/plans", "../../references"],
     "allow": ["Bash(../../scripts/*)"]
   }
 }
